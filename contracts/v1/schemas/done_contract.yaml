@@ -1,0 +1,65 @@
+# DoneContract schema — top-level build contract
+type: object
+required: [studio, lane]
+properties:
+  schema_version:
+    type: string
+    pattern: "^\\d+\\.\\d+\\.\\d+$"
+    default: "1.0.0"
+  studio:
+    type: string
+    minLength: 1
+  lane:
+    type: string
+    minLength: 1
+  created_at:
+    type: string
+    format: date-time
+    default: null
+  objective:
+    type: string
+    default: null
+  non_goals:
+    type: array
+    items:
+      type: string
+    default: []
+  run_id:
+    type: string
+    default: null
+  required_artifacts:
+    type: array
+    items:
+      $ref: "./required_artifact.yaml"
+  acceptance_criteria:
+    type: array
+    items:
+      $ref: "./acceptance_criterion.yaml"
+  forbidden_actions:
+    type: array
+    items:
+      $ref: "./forbidden_action.yaml"
+  max_iterations:
+    type: integer
+    minimum: 1
+    default: 10
+  max_runtime_minutes:
+    type: integer
+    minimum: 1
+    default: 20
+  max_cost_usd:
+    type: number
+    minimum: 0
+    default: 2.0
+  approval_required:
+    type: boolean
+    default: true
+  approval_gate:
+    type: string
+    default: mike
+  verifier_package:
+    $ref: "./verifier_package.yaml"
+
+x-invariants:
+  - approval_required=True requires at least one Human in verifier_package chain
+  - No DoneContract → no build (hard rule)

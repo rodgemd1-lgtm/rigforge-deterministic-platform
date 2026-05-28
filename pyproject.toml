@@ -1,0 +1,55 @@
+[project]
+name = "rigforge"
+version = "1.0.0"
+description = "Deterministic 7-phase agentic engineering platform — CLI, MCP servers, GEV contract models"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "RIG", email = "ops@rig.dev"}]
+readme = "README.md"
+keywords = ["rig", "forge", "agentic", "deterministic", "gev", "done-contract", "mcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "pydantic>=2.10,<3.0",
+    "click>=8.1,<9.0",
+    "pyyaml>=6.0,<7.0",
+    "rich>=13.0,<14.0",
+]
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=1.0,<2.0",
+    "fastapi>=0.110,<1.0",
+    "uvicorn>=0.29,<1.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+rigforge = "rigforge.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["rigforge", "contracts"]
+
+[tool.pytest.ini_options]
+testpaths = ["rigforge/tests", "contracts/v1/tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120

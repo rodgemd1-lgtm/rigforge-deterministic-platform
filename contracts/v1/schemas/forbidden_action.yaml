@@ -1,0 +1,20 @@
+# ForbiddenAction schema
+type: object
+required: [rule, domain]
+properties:
+  rule:
+    type: string
+    minLength: 1
+    description: Natural-language description of the forbidden action
+  domain:
+    type: string
+    enum: [security, scope, deploy, network, data, process, memory, approval]
+    description: Domain this rule belongs to
+  consequence:
+    type: string
+    default: abort
+    description: What happens if violated (always abort for forbidden actions)
+  rationale:
+    type: string
+    default: ""
+    description: Why this rule exists (links to doctrine/policy)

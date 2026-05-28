@@ -1,0 +1,25 @@
+# RequiredArtifact schema
+type: object
+required: [name, artifact_type]
+properties:
+  name:
+    type: string
+    pattern: "^[a-z][a-z0-9_]*$"
+    description: Machine-readable slug (snake_case)
+  artifact_type:
+    type: string
+    enum: [code, doc, config, data, test, proof]
+    description: Category of artifact
+  gate:
+    type: string
+    enum: [pre_build, mid_build, post_build, pre_ship, always]
+    default: post_build
+    description: When this artifact must be verified
+  optional:
+    type: boolean
+    default: false
+    description: If True, missing artifact warns but does not block
+  description:
+    type: string
+    default: ""
+    description: Human-readable explanation

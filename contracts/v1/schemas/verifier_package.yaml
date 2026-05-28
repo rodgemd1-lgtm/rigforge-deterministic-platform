@@ -1,0 +1,23 @@
+# VerifierPackage schema — GEV triad
+# Each field maps to an AgentRole enum value
+type: object
+required: [verifier, generator, evaluator]
+properties:
+  verifier:
+    type: string
+    enum: [Codex CLI, PyCode, Claude Code, OpenCode, Hermes, Jake, Human]
+    description: Agent that verifies artifacts exist and pass gates
+  generator:
+    type: string
+    enum: [Codex CLI, PyCode, Claude Code, OpenCode, Hermes, Jake, Human]
+    description: Agent that produces artifacts
+  evaluator:
+    type: string
+    enum: [Codex CLI, PyCode, Claude Code, OpenCode, Hermes, Jake, Human]
+    description: Agent that scores quality and approves/denies ship
+
+# Invariants
+x-constraints:
+  - verifier must differ from generator (no self-verification)
+  - evaluator must have >= authority of generator
+  - approval_required contracts must have at least one Human in chain

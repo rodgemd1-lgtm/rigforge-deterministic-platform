@@ -1,0 +1,22 @@
+# AcceptanceCriterion schema
+type: object
+required: [expression]
+properties:
+  expression:
+    type: string
+    minLength: 1
+    description: Human-readable assertion that must evaluate to True
+  category:
+    type: string
+    enum: [structural, functional, security, quality, compliance]
+    default: functional
+    description: Domain this gate covers
+  severity:
+    type: string
+    enum: [hard_block, soft_block, advisory]
+    default: hard_block
+    description: Consequence if criterion fails
+  test_id:
+    type: string
+    default: null
+    description: Optional link to a concrete test case ID

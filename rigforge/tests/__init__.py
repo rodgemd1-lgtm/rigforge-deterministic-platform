@@ -1,0 +1,1 @@
+# RIGForge tests — CLI and MCP server
