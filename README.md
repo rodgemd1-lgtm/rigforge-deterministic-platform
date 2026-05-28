@@ -2,11 +2,16 @@
 
 RIGForge is a fully deterministic, phase-gated build system with:
 
-- **7 build phases** from bootstrap to cockpit, each sealed with proof packets
+- **7 build phases** from bootstrap to cockpit, each sealed with integrity-hashed `ProofPacket`s
+- **HMAC-SHA256 signed proof packets** (G006) — `rigforge verify --require-signature`
 - **GEV (Generate-Evaluate-Verify) contract models** via `contracts/v1/`
-- **CLI entry-point** (`rigforge`) for status, run, seal, verify, and MCP serve
-- **MCP server** exposing contract tools for AI coding agents (Codex, Claude Code, OpenCode)
-- **30 tests** covering all 5 Pydantic models plus CLI and MCP server
+- **Operator + agent CLI** (`rigforge init|doctor|status|run|seal|verify|contract|archon|review|resume|cockpit`) with `--json` everywhere
+- **`ArchonHarness`** orchestrator with parallel multi-agent gate scheduling (G002), runtime cost/token budget enforcement (G005), and automatic resume of failed runs (G007)
+- **`RunEnvelope` + `ExecutionLedger`** for deterministic, auditable runs
+- **Typed `rigforge.yaml`** loader (`rigforge.config.RigForgeConfig`) wiring budgets, signing keys, MCP auth, scheduler, and cockpit settings
+- **MCP server** with both HTTP (bearer-token authn, G003) and stdio JSON-RPC transports (G001) for AI coding agents (Codex, Claude Code, OpenCode)
+- **Cockpit UI** (G008) — `rigforge cockpit` serves an HTML mission-control view
+- **110+ tests** covering models, CLI, harness, scheduler, budgets, signing, resume, cockpit, and both MCP transports
 
 ## Phases
 
@@ -44,25 +49,88 @@ pip install -e ".[dev]"
 ## CLI Usage
 
 ```bash
-# Show phase status
+# Scaffold a new RIGForge project (proofs/, contracts/, ledger/, docs/, rigforge.yaml)
+rigforge init
+
+# Diagnose Python version, repo layout, contracts, CI, and lint readiness
+rigforge doctor
+
+# Show phase status (add --json for machine-readable output)
 rigforge status
+rigforge --json status
 
-# Run a phase
-rigforge run 1    # Bootstrap & Doctrine
-rigforge run 5    # GEV Loop + DoneContract
+# Run a phase's deterministic gate bundle
+rigforge run 1
+rigforge run 1 --dry-run         # plan only, no side effects
+rigforge --json run 1            # machine-readable
 
-# Seal a phase (creates proof packet)
-rigforge seal 1
+# Seal a phase with a ProofPacket (artifact hashes + RunEnvelope + gate evidence)
+rigforge seal 1 --artifact docs/PHASE1.md --evidence "bootstrap complete"
 
-# Verify all sealed phases
+# Verify all sealed phases (schema + integrity hash; --strict adds phase-order check,
+# --require-signature also checks the HMAC signature on each packet)
 rigforge verify
+rigforge verify --strict --json
+rigforge verify --require-signature
 
-# List contracts
-rigforge contract
+# Resume the most recent failed or unfinished phase (G007)
+rigforge resume
 
-# Print version
+# Cockpit — Phase 7 mission-control HTML view (G008)
+rigforge cockpit                # serves on 127.0.0.1:8770 by default
+rigforge cockpit --print        # render the HTML to stdout (no server)
+
+# Contract operations
+rigforge contract list
+rigforge contract create --studio strategy --lane BC-DEMO-V1 --out contracts/v1/demo.yaml
+rigforge contract validate contracts/v1/demo.yaml
+rigforge contract inspect  contracts/v1/demo.yaml
+
+# Archon harness
+rigforge archon plan 1
+rigforge archon run  1
+rigforge archon status
+
+# Self-review surfaces
+rigforge review        # questions + gaps + status snapshot
+rigforge questions     # 20 senior-agentic-engineering questions
+rigforge gaps          # tracked platform gaps
+
+# MCP server (HTTP transport; supports --auth-token / RIGFORGE_MCP_TOKEN, G003)
+rigforge mcp-serve
+rigforge mcp-serve --auth-token "$RIGFORGE_MCP_TOKEN"
+
+# MCP server (stdio JSON-RPC transport, G001 — preferred by Claude Code etc.)
+rigforge mcp-serve --transport stdio
+
+# Version
 rigforge --version
 ```
+
+### Global options
+
+* `--cwd PATH` — override project-root discovery (default: walk upward from `cwd`
+  looking for `rigforge.yaml`, `pyproject.toml`, or `.git/`).
+* `--json` — emit machine-readable JSON where the command supports it.
+
+## Configuration (`rigforge.yaml`)
+
+`rigforge init` scaffolds a typed `rigforge.yaml`. The schema is defined by
+`rigforge.config.RigForgeConfig` and exposes:
+
+| Section | Keys | Purpose |
+|---------|------|---------|
+| `budgets` | `max_cost_usd`, `max_tokens`, `max_runtime_minutes` | Runtime ceilings enforced by `ArchonHarness.charge()` (G005) |
+| `mcp` | `host`, `port`, `transport` (`http`\|`stdio`), `services`, `token`, `token_file` | MCP server transport + bearer-token auth (G001, G003) |
+| `scheduler` | `max_parallel_gates`, `agents` | Multi-agent gate scheduling (G002) |
+| `signing` | `enabled`, `key_file`, `require_on_verify` | HMAC-SHA256 ProofPacket signing (G006) |
+| `cockpit` | `host`, `port` | Phase 7 cockpit UI (G008) |
+
+Environment-variable overrides: `RIGFORGE_SIGNING_KEY` /
+`RIGFORGE_SIGNING_KEY_FILE`, `RIGFORGE_MCP_TOKEN` /
+`RIGFORGE_MCP_TOKEN_FILE`, `RIGFORGE_MAX_PARALLEL_GATES`.
+
+`rigforge doctor` validates the file (`config_valid` gate).
 
 ## MCP Server — Use in Codex, Claude Code, OpenCode
 
@@ -179,7 +247,7 @@ pytest
 pytest contracts/v1/tests/
 
 # Run only CLI/MCP tests
-pytest rigforge/rigforge/tests/
+pytest rigforge/tests/
 
 # Run with verbose output
 pytest -v
@@ -187,14 +255,10 @@ pytest -v
 
 ## GitHub Actions CI
 
-A CI workflow template is included at `ci-workflow.yml`. Due to GitHub OAuth scope restrictions on workflow files, you need to manually add it:
+A CI workflow is installed at `.github/workflows/ci.yml`. The same content is
+preserved at `ci-workflow.yml` (root) as a portable template if you need to
+re-install it manually (e.g. from an OAuth token without `workflow` scope):
 
-1. Go to the repository on GitHub
-2. Create `.github/workflows/ci.yml`
-3. Paste the contents of `ci-workflow.yml`
-4. Commit directly to `main`
-
-Or use a personal access token with `workflow` scope:
 ```bash
 gh api repos/OWNER/REPO/contents/.github/workflows/ci.yml \
   -X PUT -f message="ci: add CI workflow" -f content="$(base64 < ci-workflow.yml)"
@@ -203,33 +267,36 @@ gh api repos/OWNER/REPO/contents/.github/workflows/ci.yml \
 ## Project Structure
 
 ```
-rigforge/
+rigforge-deterministic-platform/
   rigforge/
     __init__.py          # Package root, version
     cli.py               # Click CLI entry-point (rigforge command)
-    mcp_server.py        # MCP server (FastAPI + contract tools)
+    config.py            # Typed rigforge.yaml loader (RigForgeConfig)
+    context.py           # Project-root resolver
+    run_envelope.py      # RunEnvelope model (run identity + env snapshot)
+    proof.py             # ProofPacket model (artifact hashes + integrity hash + HMAC signature)
+    ledger.py            # ExecutionLedger (append-only JSONL audit log)
+    gates.py             # Built-in quality gates + per-phase bundles
+    harness.py           # ArchonHarness (plan → parallel gates → seal, budgets, resume)
+    cockpit.py           # Phase 7 cockpit (HTML + FastAPI app, G008)
+    questions.py         # 20 senior-agentic-engineering questions
+    gaps.py              # Tracked + resolved platform gaps
+    mcp_server.py        # MCP server (HTTP + stdio JSON-RPC, bearer-token auth)
     tests/
       test_cli.py         # CLI command tests
       test_mcp_server.py  # MCP server tool tests
+      test_platform.py    # ProofPacket/RunEnvelope/Ledger/Harness/Gates tests
   contracts/
     v1/
       __init__.py           # Package export of 5 models
-      models/
-        done_contract.py    # Top-level build contract
-        verifier_package.py # GEV triad model
-        required_artifact.py
-        acceptance_criterion.py
-        forbidden_action.py
-      schemas/
-        done_contract.yaml
-        verifier_package.yaml
-        required_artifact.yaml
-        acceptance_criterion.yaml
-        forbidden_action.yaml
+      models/               # Pydantic GEV models
+      schemas/              # YAML schema references
       tests/
         test_gev_models.py  # 30 tests for all 5 models
-  pyproject.toml           # Build config, dependencies, CLI entry-point
-  README.md                # This file
+  .github/workflows/ci.yml  # CI workflow
+  ci-workflow.yml           # Portable CI template (mirror of installed workflow)
+  pyproject.toml            # Build config, dependencies, CLI entry-point
+  README.md                 # This file
 ```
 
 ## License
