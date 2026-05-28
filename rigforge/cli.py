@@ -32,11 +32,12 @@ import click
 
 import rigforge
 from rigforge.context import ProjectContext
-from rigforge.gaps import GAPS, as_dicts as gaps_as_dicts
+from rigforge.gaps import GAPS, RESOLVED_GAPS, as_dicts as gaps_as_dicts, resolved_as_dicts
 from rigforge.gates import (
     GateResult,
     HARD_BLOCK,
     gate_ci_workflow,
+    gate_config_valid,
     gate_contract_schema,
     gate_contracts_present,
     gate_python_version,
@@ -113,12 +114,8 @@ def init(click_ctx: click.Context):
 
     cfg = ctx.config_file
     if not cfg.exists():
-        cfg.write_text(
-            "# RIGForge project config\n"
-            "schema_version: 1.0.0\n"
-            f"project: {ctx.root.name}\n"
-            "phases: 7\n"
-        )
+        from rigforge.config import default_config_yaml
+        cfg.write_text(default_config_yaml(ctx.root.name))
         created.append(str(cfg.relative_to(ctx.root)))
 
     payload = {"root": str(ctx.root), "created": created, "ok": True}
@@ -147,6 +144,7 @@ def doctor(click_ctx: click.Context):
         gate_ci_workflow(ctx),
         gate_contracts_present(ctx),
         gate_contract_schema(ctx),
+        gate_config_valid(ctx),
         gate_ruff(ctx),
     ]
     blocking_failed = [c for c in checks if not c.passed and c.severity == HARD_BLOCK]
@@ -319,10 +317,24 @@ def seal(click_ctx: click.Context, phase: int, artifacts: tuple[Path, ...],
 @main.command()
 @click.option("--strict", is_flag=True, default=False,
               help="Require integrity hash + phase-order continuity (no gaps).")
+@click.option("--require-signature", is_flag=True, default=False,
+              help="Also verify the HMAC signature on each proof packet (G006).")
 @click.pass_context
-def verify(click_ctx: click.Context, strict: bool):
-    """Verify all sealed phases: schema, integrity hash, phase order."""
+def verify(click_ctx: click.Context, strict: bool, require_signature: bool):
+    """Verify all sealed phases: schema, integrity hash, phase order, signature."""
     ctx = _ctx(click_ctx)
+    from rigforge.config import load_config
+
+    try:
+        cfg = load_config(ctx)
+    except ValueError:
+        cfg = None
+    signing_key = cfg.resolve_signing_key(ctx.root) if cfg is not None else None
+    if require_signature and signing_key is None:
+        click.echo("❌ --require-signature was set but no signing key is configured "
+                   "(set RIGFORGE_SIGNING_KEY or configure signing.key_file in rigforge.yaml).")
+        sys.exit(2)
+
     phase_reports: list[dict] = []
     sealed_phases: list[int] = []
     errors: list[str] = []
@@ -340,6 +352,9 @@ def verify(click_ctx: click.Context, strict: bool):
             continue
         sealed_phases.append(p)
         integrity = packet.verify_integrity()
+        signature_ok: bool | None = None
+        if signing_key is not None and packet.signature:
+            signature_ok = packet.verify_signature(signing_key)
         report = {
             "phase": p,
             "name": name,
@@ -347,9 +362,16 @@ def verify(click_ctx: click.Context, strict: bool):
             "verifier": packet.verifier,
             "artifact_count": len(packet.artifacts),
             "integrity_ok": integrity,
+            "signed": bool(packet.signature),
+            "signature_ok": signature_ok,
         }
         if strict and not integrity and packet.schema_version != "0.0.0":
             errors.append(f"Phase {p}: integrity hash mismatch.")
+        if require_signature:
+            if not packet.signature:
+                errors.append(f"Phase {p}: proof packet is not signed.")
+            elif signature_ok is False:
+                errors.append(f"Phase {p}: signature does not verify.")
         phase_reports.append(report)
 
     if strict and sealed_phases:
@@ -632,43 +654,154 @@ def questions(click_ctx: click.Context):
 
 
 @main.command()
+@click.option("--all", "show_all", is_flag=True, default=False,
+              help="Also list previously resolved gaps for the audit trail.")
 @click.pass_context
-def gaps(click_ctx: click.Context):
+def gaps(click_ctx: click.Context, show_all: bool):
     """List known platform gaps."""
-    payload = {"gaps": gaps_as_dicts()}
-    _emit(
-        click_ctx,
-        lambda: (
-            click.echo("🕳️  Known platform gaps:"),
-            *(click.echo(f"  {g.id} [{g.severity:8s}] {g.area:14s} {g.summary}") for g in GAPS),
-        ),
-        payload,
-    )
+    payload: dict = {"gaps": gaps_as_dicts()}
+    if show_all:
+        payload["resolved"] = resolved_as_dicts()
+
+    def render():
+        click.echo("🕳️  Known platform gaps:")
+        if not GAPS:
+            click.echo("  (none — all tracked gaps resolved)")
+        for g in GAPS:
+            click.echo(f"  {g.id} [{g.severity:8s}] {g.area:14s} {g.summary}")
+        if show_all and RESOLVED_GAPS:
+            click.echo("\n✅ Resolved:")
+            for g in RESOLVED_GAPS:
+                click.echo(f"  {g.id} [{g.severity:8s}] {g.area:14s} {g.summary}")
+
+    _emit(click_ctx, render, payload)
+
+
+# ── resume (G007) ───────────────────────────────────────────────────────
+
+
+@main.command()
+@click.pass_context
+def resume(click_ctx: click.Context):
+    """Re-run the most recent failed or unfinished phase (G007)."""
+    ctx = _ctx(click_ctx)
+    harness = ArchonHarness(ctx)
+    target = harness.find_resumable()
+    if target is None or not target.get("phase"):
+        payload = {"ok": True, "resumed": False, "message": "nothing to resume"}
+        _emit(click_ctx, lambda: click.echo("✅ Nothing to resume."), payload)
+        return
+    verifier = _verifier_identity()
+    result = harness.resume(verifier=verifier)
+    payload = {
+        "ok": bool(result and result.ok),
+        "resumed": True,
+        "target": target,
+        "result": result.to_dict() if result else None,
+    }
+
+    def render():
+        click.echo(f"♻️  Resuming Phase {target['phase']} (reason: {target.get('reason')})")
+        if result is None:
+            click.echo("  nothing to do.")
+            return
+        for g in result.gates:
+            icon = "✅" if g.passed else ("❌" if g.severity == HARD_BLOCK else "⚠️")
+            click.echo(f"  {icon} {g.name:24s} [{g.severity:11s}] {g.detail}")
+        click.echo("✅ Resume complete." if result.ok else "❌ Resume still has blockers.")
+
+    _emit(click_ctx, render, payload)
+    if result is not None and not result.ok:
+        sys.exit(1)
+
+
+# ── cockpit (G008) ──────────────────────────────────────────────────────
+
+
+@main.command()
+@click.option("--host", default=None, help="Override cockpit bind host.")
+@click.option("--port", default=None, type=int, help="Override cockpit bind port.")
+@click.option("--print", "print_only", is_flag=True, default=False,
+              help="Render the cockpit HTML to stdout instead of starting the server.")
+@click.pass_context
+def cockpit(click_ctx: click.Context, host: str | None, port: int | None, print_only: bool):
+    """Phase 7 cockpit: mission-control HTML view over phases + ledger (G008)."""
+    ctx = _ctx(click_ctx)
+    from rigforge.cockpit import build_cockpit_app, render_cockpit_html
+
+    if print_only:
+        click.echo(render_cockpit_html(ctx))
+        return
+
+    from rigforge.config import load_config
+    cfg = load_config(ctx)
+    bind_host = host or cfg.cockpit.host
+    bind_port = port or cfg.cockpit.port
+    try:
+        app = build_cockpit_app(ctx)
+        import uvicorn
+    except ImportError as exc:
+        click.echo(f"⚠️  Cockpit dependencies not installed: {exc}")
+        click.echo("   Install with: pip install rigforge[mcp]")
+        sys.exit(1)
+    click.echo(f"🛸  RIGForge cockpit at http://{bind_host}:{bind_port}/")
+    uvicorn.run(app, host=bind_host, port=bind_port)
 
 
 # ── MCP server ──────────────────────────────────────────────────────────
 
 
 @main.command("mcp-serve")
-@click.option("--host", default="0.0.0.0", help="Host to bind MCP server")
-@click.option("--port", default=8765, type=int, help="Port for MCP server")
-@click.option("--services", default="recall,stitch,archon,deerflow",
+@click.option("--host", default=None, help="Host to bind MCP server (HTTP transport)")
+@click.option("--port", default=None, type=int, help="Port for MCP server (HTTP transport)")
+@click.option("--services", default=None,
               help="Comma-separated MCP services to start")
-def mcp_serve(host: str, port: int, services: str):
-    """Boot MCP servers (Recall, Stitch, Archon, DeerFlow)."""
-    service_list = [s.strip() for s in services.split(",")]
-    click.echo(f"🚀 Starting RIGForge MCP server on {host}:{port}")
+@click.option("--transport", type=click.Choice(["http", "stdio"], case_sensitive=False),
+              default=None, help="Transport protocol (default from rigforge.yaml).")
+@click.option("--auth-token", default=None,
+              help="Shared bearer token required for HTTP requests (G003). "
+                   "Falls back to RIGFORGE_MCP_TOKEN / rigforge.yaml.")
+@click.pass_context
+def mcp_serve(click_ctx: click.Context, host: str | None, port: int | None,
+              services: str | None, transport: str | None, auth_token: str | None):
+    """Boot MCP servers (Recall, Stitch, Archon, DeerFlow) over HTTP or stdio."""
+    ctx = _ctx(click_ctx)
+    from rigforge.config import load_config
+
+    cfg = load_config(ctx)
+    transport_kind = (transport or cfg.mcp.transport).lower()
+    service_list = (
+        [s.strip() for s in services.split(",")] if services else list(cfg.mcp.services)
+    )
+
+    if transport_kind == "stdio":
+        from rigforge.mcp_server import serve_stdio
+        click.echo(
+            f"🛰️  RIGForge MCP stdio transport ready (services={','.join(service_list)})",
+            err=True,
+        )
+        serve_stdio()
+        return
+
+    bind_host = host or cfg.mcp.host
+    bind_port = port or cfg.mcp.port
+    token = auth_token if auth_token is not None else cfg.resolve_mcp_token(ctx.root)
+    click.echo(f"🚀 Starting RIGForge MCP server on {bind_host}:{bind_port}")
     click.echo(f"   Services: {', '.join(service_list)}")
+    if token:
+        click.echo("   Auth: bearer-token required (G003)")
     try:
         from rigforge.mcp_server import create_mcp_server
 
-        server = create_mcp_server(host=host, port=port, services=service_list)
-        click.echo(f"   MCP server ready at http://{host}:{port}")
+        server = create_mcp_server(
+            host=bind_host, port=bind_port, services=service_list, auth_token=token,
+        )
+        click.echo(f"   MCP server ready at http://{bind_host}:{bind_port}")
         click.echo("   Tools: gev.contract_create/validate/list, gev.phase_status, gev.proof_seal")
         click.echo("   Press Ctrl+C to stop.")
         import uvicorn
 
-        uvicorn.run(server, host=host, port=port)
+        uvicorn.run(server, host=bind_host, port=bind_port)
     except ImportError as exc:
         click.echo(f"⚠️  MCP dependencies not installed: {exc}")
         click.echo("   Install with: pip install rigforge[mcp]")

@@ -17,6 +17,7 @@ that existing seals do not break.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +27,7 @@ from pydantic import BaseModel, Field
 from rigforge.run_envelope import RunEnvelope
 
 
-PROOF_SCHEMA_VERSION = "1.0.0"
+PROOF_SCHEMA_VERSION = "1.1.0"
 
 
 class ArtifactRecord(BaseModel):
@@ -74,31 +75,54 @@ class ProofPacket(BaseModel):
     gates: list[GateOutcome] = Field(default_factory=list)
     run_envelope: RunEnvelope | None = None
     packet_sha256: str = ""
+    signature: str = Field(
+        default="",
+        description="HMAC-SHA256 of packet_sha256 with the project signing key (G006).",
+    )
+    signature_algo: str = Field(default="hmac-sha256")
 
     # ── Integrity ──────────────────────────────────────────────────────
 
     def _payload_for_hash(self) -> bytes:
         data = self.model_dump(mode="json")
         data.pop("packet_sha256", None)
+        data.pop("signature", None)
+        data.pop("signature_algo", None)
         return json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
     def compute_hash(self) -> str:
         return hashlib.sha256(self._payload_for_hash()).hexdigest()
 
-    def sealed(self) -> "ProofPacket":
-        """Return a copy with ``packet_sha256`` populated."""
-        return self.model_copy(update={"packet_sha256": self.compute_hash()})
+    def sealed(self, signing_key: bytes | None = None) -> "ProofPacket":
+        """Return a copy with ``packet_sha256`` (and signature, if a key is
+        supplied) populated."""
+        update: dict = {"packet_sha256": self.compute_hash()}
+        if signing_key:
+            update["signature"] = hmac.new(
+                signing_key, update["packet_sha256"].encode("utf-8"), hashlib.sha256
+            ).hexdigest()
+            update["signature_algo"] = "hmac-sha256"
+        return self.model_copy(update=update)
 
     def verify_integrity(self) -> bool:
         if not self.packet_sha256:
             return False
         return self.packet_sha256 == self.compute_hash()
 
+    def verify_signature(self, signing_key: bytes) -> bool:
+        """Constant-time verification of the HMAC signature over the hash."""
+        if not self.signature or not self.packet_sha256:
+            return False
+        expected = hmac.new(
+            signing_key, self.packet_sha256.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        return hmac.compare_digest(expected, self.signature)
+
     # ── Persistence ────────────────────────────────────────────────────
 
-    def write(self, path: Path) -> Path:
+    def write(self, path: Path, *, signing_key: bytes | None = None) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        packet = self.sealed()
+        packet = self.sealed(signing_key=signing_key)
         path.write_text(json.dumps(packet.model_dump(mode="json"), indent=2))
         return path
 

@@ -21,16 +21,24 @@ class GapFinding:
 
 
 GAPS: tuple[GapFinding, ...] = (
-    GapFinding("G001", "mcp", "soft", "MCP server exposes HTTP only; full MCP stdio transport not yet implemented."),
-    GapFinding("G002", "harness", "soft", "ArchonHarness is a minimal in-process orchestrator; no multi-agent scheduling yet."),
-    GapFinding("G003", "auth", "soft", "MCP tools have no authn/authz; assume trusted network."),
     GapFinding("G004", "reproducibility", "advisory", "RunEnvelope captures Python/platform fingerprint but does not hash full dep lockfile."),
-    GapFinding("G005", "cost", "advisory", "Token/cost budgets in DoneContract are declared but not yet enforced at runtime."),
-    GapFinding("G006", "signing", "soft", "Proof packets are checksummed but not cryptographically signed."),
-    GapFinding("G007", "resume", "soft", "No automatic resume of failed runs from the last ledger checkpoint."),
-    GapFinding("G008", "ui", "advisory", "Cockpit UI (Phase 7) is not implemented."),
+)
+
+
+RESOLVED_GAPS: tuple[GapFinding, ...] = (
+    GapFinding("G001", "mcp", "soft", "MCP stdio transport — implemented in rigforge.mcp_server.serve_stdio (JSON-RPC 2.0)."),
+    GapFinding("G002", "harness", "soft", "Multi-agent scheduling — ArchonHarness runs gates in parallel via scheduler.max_parallel_gates."),
+    GapFinding("G003", "auth", "soft", "MCP HTTP authn — bearer-token middleware; token via RIGFORGE_MCP_TOKEN or rigforge.yaml."),
+    GapFinding("G005", "cost", "advisory", "Runtime token/cost enforcement — BudgetTracker + ArchonHarness.charge() raises BudgetExceeded."),
+    GapFinding("G006", "signing", "soft", "ProofPacket HMAC-SHA256 signing; verify via `rigforge verify --require-signature`."),
+    GapFinding("G007", "resume", "soft", "ArchonHarness.find_resumable / resume + `rigforge resume` re-runs the last failed/unfinished phase."),
+    GapFinding("G008", "ui", "advisory", "Cockpit UI — FastAPI HTML view served by `rigforge cockpit` (HTML renderer is dep-free)."),
 )
 
 
 def as_dicts() -> list[dict]:
     return [asdict(g) for g in GAPS]
+
+
+def resolved_as_dicts() -> list[dict]:
+    return [asdict(g) for g in RESOLVED_GAPS]

@@ -163,25 +163,66 @@ def gate_contract_schema(ctx: ProjectContext) -> GateResult:
     )
 
 
+def gate_config_valid(ctx: ProjectContext) -> GateResult:
+    """Parse and validate ``rigforge.yaml`` via the typed loader."""
+    from rigforge.config import load_config
+
+    if not ctx.config_file.exists():
+        return GateResult(
+            name="config_valid",
+            passed=True,
+            severity=ADVISORY,
+            detail="no rigforge.yaml (defaults assumed)",
+        )
+    try:
+        cfg = load_config(ctx)
+    except ValueError as exc:
+        return GateResult(
+            name="config_valid",
+            passed=False,
+            severity=HARD_BLOCK,
+            detail=str(exc),
+        )
+    return GateResult(
+        name="config_valid",
+        passed=True,
+        severity=HARD_BLOCK,
+        detail=f"schema={cfg.schema_version} project={cfg.project}",
+    )
+
+
 # ── Per-phase bundles ──────────────────────────────────────────────────
 
 
 def gates_for_phase(ctx: ProjectContext, phase: int) -> list[GateResult]:
-    """Return the canonical gate set for a phase."""
+    """Return the canonical gate set for a phase (executed sequentially)."""
+    return [t() for t in gate_thunks_for_phase(ctx, phase)]
+
+
+def gate_thunks_for_phase(ctx: ProjectContext, phase: int):
+    """Return zero-arg callables for each gate in ``phase``.
+
+    Returning thunks (rather than already-executed results) lets the harness
+    schedule gates concurrently (G002) without changing the calling contract.
+    """
     if phase == 1:
-        return [gate_python_version(), gate_repo_layout(ctx)]
+        return [gate_python_version, lambda: gate_repo_layout(ctx)]
     if phase == 2:
-        return [gate_python_version(), gate_repo_layout(ctx), gate_ci_workflow(ctx)]
+        return [
+            gate_python_version,
+            lambda: gate_repo_layout(ctx),
+            lambda: gate_ci_workflow(ctx),
+        ]
     if phase == 3:
-        return [gate_repo_layout(ctx), gate_contracts_present(ctx)]
+        return [lambda: gate_repo_layout(ctx), lambda: gate_contracts_present(ctx)]
     if phase == 4:
-        return [gate_contracts_present(ctx), gate_contract_schema(ctx)]
+        return [lambda: gate_contracts_present(ctx), lambda: gate_contract_schema(ctx)]
     if phase == 5:
-        return [gate_contract_schema(ctx), gate_pytest(ctx)]
+        return [lambda: gate_contract_schema(ctx), lambda: gate_pytest(ctx)]
     if phase == 6:
-        return [gate_contracts_present(ctx), gate_pytest(ctx)]
+        return [lambda: gate_contracts_present(ctx), lambda: gate_pytest(ctx)]
     if phase == 7:
-        return [gate_pytest(ctx), gate_ci_workflow(ctx)]
+        return [lambda: gate_pytest(ctx), lambda: gate_ci_workflow(ctx)]
     return []
 
 

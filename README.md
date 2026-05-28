@@ -3,12 +3,15 @@
 RIGForge is a fully deterministic, phase-gated build system with:
 
 - **7 build phases** from bootstrap to cockpit, each sealed with integrity-hashed `ProofPacket`s
+- **HMAC-SHA256 signed proof packets** (G006) — `rigforge verify --require-signature`
 - **GEV (Generate-Evaluate-Verify) contract models** via `contracts/v1/`
-- **Operator + agent CLI** (`rigforge init|doctor|status|run|seal|verify|contract|archon|review`) with `--json` everywhere
-- **`ArchonHarness`** orchestrator: plan → per-phase quality gates → seal
+- **Operator + agent CLI** (`rigforge init|doctor|status|run|seal|verify|contract|archon|review|resume|cockpit`) with `--json` everywhere
+- **`ArchonHarness`** orchestrator with parallel multi-agent gate scheduling (G002), runtime cost/token budget enforcement (G005), and automatic resume of failed runs (G007)
 - **`RunEnvelope` + `ExecutionLedger`** for deterministic, auditable runs
-- **MCP server** exposing contract tools for AI coding agents (Codex, Claude Code, OpenCode)
-- **70+ tests** covering all 5 Pydantic models, the CLI, the harness, and the MCP server
+- **Typed `rigforge.yaml`** loader (`rigforge.config.RigForgeConfig`) wiring budgets, signing keys, MCP auth, scheduler, and cockpit settings
+- **MCP server** with both HTTP (bearer-token authn, G003) and stdio JSON-RPC transports (G001) for AI coding agents (Codex, Claude Code, OpenCode)
+- **Cockpit UI** (G008) — `rigforge cockpit` serves an HTML mission-control view
+- **110+ tests** covering models, CLI, harness, scheduler, budgets, signing, resume, cockpit, and both MCP transports
 
 ## Phases
 
@@ -64,9 +67,18 @@ rigforge --json run 1            # machine-readable
 # Seal a phase with a ProofPacket (artifact hashes + RunEnvelope + gate evidence)
 rigforge seal 1 --artifact docs/PHASE1.md --evidence "bootstrap complete"
 
-# Verify all sealed phases (schema + integrity hash; --strict adds phase-order check)
+# Verify all sealed phases (schema + integrity hash; --strict adds phase-order check,
+# --require-signature also checks the HMAC signature on each packet)
 rigforge verify
 rigforge verify --strict --json
+rigforge verify --require-signature
+
+# Resume the most recent failed or unfinished phase (G007)
+rigforge resume
+
+# Cockpit — Phase 7 mission-control HTML view (G008)
+rigforge cockpit                # serves on 127.0.0.1:8770 by default
+rigforge cockpit --print        # render the HTML to stdout (no server)
 
 # Contract operations
 rigforge contract list
@@ -84,8 +96,12 @@ rigforge review        # questions + gaps + status snapshot
 rigforge questions     # 20 senior-agentic-engineering questions
 rigforge gaps          # tracked platform gaps
 
-# MCP server
+# MCP server (HTTP transport; supports --auth-token / RIGFORGE_MCP_TOKEN, G003)
 rigforge mcp-serve
+rigforge mcp-serve --auth-token "$RIGFORGE_MCP_TOKEN"
+
+# MCP server (stdio JSON-RPC transport, G001 — preferred by Claude Code etc.)
+rigforge mcp-serve --transport stdio
 
 # Version
 rigforge --version
@@ -96,6 +112,25 @@ rigforge --version
 * `--cwd PATH` — override project-root discovery (default: walk upward from `cwd`
   looking for `rigforge.yaml`, `pyproject.toml`, or `.git/`).
 * `--json` — emit machine-readable JSON where the command supports it.
+
+## Configuration (`rigforge.yaml`)
+
+`rigforge init` scaffolds a typed `rigforge.yaml`. The schema is defined by
+`rigforge.config.RigForgeConfig` and exposes:
+
+| Section | Keys | Purpose |
+|---------|------|---------|
+| `budgets` | `max_cost_usd`, `max_tokens`, `max_runtime_minutes` | Runtime ceilings enforced by `ArchonHarness.charge()` (G005) |
+| `mcp` | `host`, `port`, `transport` (`http`\|`stdio`), `services`, `token`, `token_file` | MCP server transport + bearer-token auth (G001, G003) |
+| `scheduler` | `max_parallel_gates`, `agents` | Multi-agent gate scheduling (G002) |
+| `signing` | `enabled`, `key_file`, `require_on_verify` | HMAC-SHA256 ProofPacket signing (G006) |
+| `cockpit` | `host`, `port` | Phase 7 cockpit UI (G008) |
+
+Environment-variable overrides: `RIGFORGE_SIGNING_KEY` /
+`RIGFORGE_SIGNING_KEY_FILE`, `RIGFORGE_MCP_TOKEN` /
+`RIGFORGE_MCP_TOKEN_FILE`, `RIGFORGE_MAX_PARALLEL_GATES`.
+
+`rigforge doctor` validates the file (`config_valid` gate).
 
 ## MCP Server — Use in Codex, Claude Code, OpenCode
 
@@ -236,15 +271,17 @@ rigforge-deterministic-platform/
   rigforge/
     __init__.py          # Package root, version
     cli.py               # Click CLI entry-point (rigforge command)
+    config.py            # Typed rigforge.yaml loader (RigForgeConfig)
     context.py           # Project-root resolver
     run_envelope.py      # RunEnvelope model (run identity + env snapshot)
-    proof.py             # ProofPacket model (artifact hashes + integrity hash)
+    proof.py             # ProofPacket model (artifact hashes + integrity hash + HMAC signature)
     ledger.py            # ExecutionLedger (append-only JSONL audit log)
     gates.py             # Built-in quality gates + per-phase bundles
-    harness.py           # ArchonHarness (plan → run gates → seal)
+    harness.py           # ArchonHarness (plan → parallel gates → seal, budgets, resume)
+    cockpit.py           # Phase 7 cockpit (HTML + FastAPI app, G008)
     questions.py         # 20 senior-agentic-engineering questions
-    gaps.py              # Tracked platform gaps
-    mcp_server.py        # MCP server (FastAPI + contract tools)
+    gaps.py              # Tracked + resolved platform gaps
+    mcp_server.py        # MCP server (HTTP + stdio JSON-RPC, bearer-token auth)
     tests/
       test_cli.py         # CLI command tests
       test_mcp_server.py  # MCP server tool tests

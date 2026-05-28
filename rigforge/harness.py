@@ -8,10 +8,12 @@ or report blockers. It is intentionally synchronous and in-process; the
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from rigforge.context import ProjectContext
+from rigforge.config import RigForgeConfig, load_config
 from rigforge.gates import (
     GateResult,
     all_blocking_failed,
@@ -46,6 +48,9 @@ class HarnessResult:
     gates: list[GateResult] = field(default_factory=list)
     blockers: list[GateResult] = field(default_factory=list)
     ok: bool = True
+    cost_usd: float = 0.0
+    tokens: int = 0
+    budget_exceeded: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -54,15 +59,72 @@ class HarnessResult:
             "envelope": self.envelope.to_dict(),
             "gates": [g.to_dict() for g in self.gates],
             "blockers": [g.to_dict() for g in self.blockers],
+            "cost_usd": self.cost_usd,
+            "tokens": self.tokens,
+            "budget_exceeded": self.budget_exceeded,
+        }
+
+
+class BudgetExceeded(RuntimeError):
+    """Raised when a run's cost/token charge would exceed configured ceilings (G005)."""
+
+
+@dataclass
+class BudgetTracker:
+    """In-memory tracker honouring ``RigForgeConfig.budgets`` (G005)."""
+
+    max_cost_usd: float
+    max_tokens: int
+    cost_usd: float = 0.0
+    tokens: int = 0
+
+    def charge(self, *, cost_usd: float = 0.0, tokens: int = 0) -> None:
+        if cost_usd < 0 or tokens < 0:
+            raise ValueError("charges must be non-negative")
+        new_cost = self.cost_usd + cost_usd
+        new_tokens = self.tokens + tokens
+        if new_cost > self.max_cost_usd:
+            raise BudgetExceeded(
+                f"cost budget exceeded: {new_cost:.4f} > {self.max_cost_usd:.4f} USD"
+            )
+        if new_tokens > self.max_tokens:
+            raise BudgetExceeded(
+                f"token budget exceeded: {new_tokens} > {self.max_tokens}"
+            )
+        self.cost_usd = new_cost
+        self.tokens = new_tokens
+
+    def snapshot(self) -> dict:
+        return {
+            "cost_usd": self.cost_usd,
+            "tokens": self.tokens,
+            "max_cost_usd": self.max_cost_usd,
+            "max_tokens": self.max_tokens,
         }
 
 
 class ArchonHarness:
     """In-process phase harness."""
 
-    def __init__(self, ctx: ProjectContext, ledger: ExecutionLedger | None = None):
+    def __init__(
+        self,
+        ctx: ProjectContext,
+        ledger: ExecutionLedger | None = None,
+        *,
+        config: RigForgeConfig | None = None,
+    ):
         self.ctx = ctx
         self.ledger = ledger or ExecutionLedger(ctx.ledger_file)
+        try:
+            self.config = config or load_config(ctx)
+        except ValueError:
+            # ``rigforge.yaml`` is malformed; the doctor gate surfaces the
+            # precise error. Fall back to defaults so the harness still runs.
+            self.config = RigForgeConfig()
+        self.budget = BudgetTracker(
+            max_cost_usd=self.config.budgets.max_cost_usd,
+            max_tokens=self.config.budgets.max_tokens,
+        )
 
     # ── Planning ───────────────────────────────────────────────────────
 
@@ -72,7 +134,64 @@ class ArchonHarness:
         steps.append(PlanStep(name="seal", description=f"Seal phase {phase} with ProofPacket"))
         return steps
 
+    # ── Charging (G005) ────────────────────────────────────────────────
+
+    def charge(self, *, cost_usd: float = 0.0, tokens: int = 0,
+               actor: str | None = None, note: str | None = None) -> dict:
+        """Charge cost/tokens to the run budget, logging to the ledger.
+
+        Raises ``BudgetExceeded`` if the charge would breach a configured
+        ceiling. The ledger always records the *attempted* charge so audits
+        can reconstruct what tried to happen.
+        """
+        try:
+            self.budget.charge(cost_usd=cost_usd, tokens=tokens)
+            outcome = "ok"
+        except BudgetExceeded as exc:
+            outcome = f"exceeded: {exc}"
+            self.ledger.append(
+                kind="budget.charge",
+                actor=actor,
+                charge_cost_usd=cost_usd,
+                charge_tokens=tokens,
+                outcome=outcome,
+                note=note,
+                **self.budget.snapshot(),
+            )
+            raise
+        record = self.ledger.append(
+            kind="budget.charge",
+            actor=actor,
+            charge_cost_usd=cost_usd,
+            charge_tokens=tokens,
+            outcome=outcome,
+            note=note,
+            **self.budget.snapshot(),
+        )
+        return record
+
     # ── Execution ──────────────────────────────────────────────────────
+
+    def _run_gates(self, phase: int) -> list[GateResult]:
+        """Run the per-phase gate bundle, honouring scheduler parallelism (G002).
+
+        Each gate is a thunk (zero-arg callable). When ``max_parallel_gates``
+        is greater than 1, gates are dispatched to a thread pool — order is
+        preserved in the returned list to keep proofs deterministic.
+        """
+        from rigforge.gates import gate_thunks_for_phase
+
+        thunks = gate_thunks_for_phase(self.ctx, phase)
+        parallel = self.config.resolve_parallelism()
+        if parallel <= 1 or len(thunks) <= 1:
+            return [thunk() for thunk in thunks]
+        results: list[GateResult | None] = [None] * len(thunks)
+        with ThreadPoolExecutor(max_workers=min(parallel, len(thunks))) as pool:
+            futures = {pool.submit(thunk): i for i, thunk in enumerate(thunks)}
+            for fut in futures:
+                idx = futures[fut]
+                results[idx] = fut.result()
+        return [r for r in results if r is not None]
 
     def run(self, phase: int, *, dry_run: bool = False, verifier: str | None = None) -> HarnessResult:
         envelope = RunEnvelope(phase=phase, dry_run=dry_run, verifier=verifier)
@@ -97,7 +216,7 @@ class ArchonHarness:
             )
             return result
 
-        gates = gates_for_phase(self.ctx, phase)
+        gates = self._run_gates(phase)
         blockers = all_blocking_failed(gates)
         envelope = envelope.finish()
         result = HarnessResult(
@@ -106,6 +225,8 @@ class ArchonHarness:
             gates=gates,
             blockers=blockers,
             ok=not blockers,
+            cost_usd=self.budget.cost_usd,
+            tokens=self.budget.tokens,
         )
         self.ledger.append(
             kind="run.finish",
@@ -114,8 +235,66 @@ class ArchonHarness:
             phase=phase,
             ok=result.ok,
             blocker_count=len(blockers),
+            cost_usd=self.budget.cost_usd,
+            tokens=self.budget.tokens,
         )
         return result
+
+    # ── Resume (G007) ──────────────────────────────────────────────────
+
+    def find_resumable(self) -> dict | None:
+        """Return the most recent run that needs to be resumed, if any.
+
+        A run is *resumable* if either:
+
+        * a ``run.start`` event has no matching ``run.finish`` with the same
+          ``run_id`` (crashed mid-run), or
+        * the latest ``run.finish`` for a phase reports ``ok=False`` (had
+          blocking failures).
+        """
+        events = self.ledger.read()
+        starts: dict[str, dict] = {}
+        finishes: set[str] = set()
+        last_failed_phase: dict | None = None
+        for ev in events:
+            kind = ev.get("kind")
+            run_id = ev.get("run_id")
+            if not run_id:
+                continue
+            if kind == "run.start":
+                starts[run_id] = ev
+            elif kind == "run.finish":
+                finishes.add(run_id)
+                if ev.get("ok") is False:
+                    last_failed_phase = {
+                        "phase": ev.get("phase"),
+                        "run_id": run_id,
+                        "reason": "previous_run_failed",
+                    }
+        # Crashed (no finish): newest first.
+        for run_id, start in reversed(list(starts.items())):
+            if run_id not in finishes and not start.get("dry_run"):
+                return {
+                    "phase": start.get("phase"),
+                    "run_id": run_id,
+                    "reason": "no_finish_recorded",
+                }
+        return last_failed_phase
+
+    def resume(self, *, verifier: str | None = None) -> HarnessResult | None:
+        """Re-run the last unfinished or failed phase. Returns ``None`` if
+        there is nothing to resume."""
+        target = self.find_resumable()
+        if target is None or not target.get("phase"):
+            return None
+        self.ledger.append(
+            kind="run.resume",
+            actor=verifier,
+            phase=target["phase"],
+            previous_run_id=target.get("run_id"),
+            reason=target.get("reason"),
+        )
+        return self.run(int(target["phase"]), verifier=verifier)
 
     # ── Sealing ────────────────────────────────────────────────────────
 
@@ -146,7 +325,12 @@ class ArchonHarness:
             run_envelope=envelope,
         )
         path = self.ctx.proof_file(phase)
-        packet.write(path)
+        signing_key = (
+            self.config.resolve_signing_key(self.ctx.root)
+            if self.config.signing.enabled
+            else None
+        )
+        packet.write(path, signing_key=signing_key)
         self.ledger.append(
             kind="phase.seal",
             actor=verifier,
@@ -154,6 +338,7 @@ class ArchonHarness:
             proof_path=str(path.relative_to(self.ctx.root)),
             artifact_count=len(artifact_records),
             gate_count=len(gate_records),
+            signed=bool(signing_key),
         )
         return ProofPacket.load(path)
 
