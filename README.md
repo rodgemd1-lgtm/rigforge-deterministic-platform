@@ -185,6 +185,21 @@ pytest rigforge/rigforge/tests/
 pytest -v
 ```
 
+## GitHub Actions CI
+
+A CI workflow template is included at `ci-workflow.yml`. Due to GitHub OAuth scope restrictions on workflow files, you need to manually add it:
+
+1. Go to the repository on GitHub
+2. Create `.github/workflows/ci.yml`
+3. Paste the contents of `ci-workflow.yml`
+4. Commit directly to `main`
+
+Or use a personal access token with `workflow` scope:
+```bash
+gh api repos/OWNER/REPO/contents/.github/workflows/ci.yml \
+  -X PUT -f message="ci: add CI workflow" -f content="$(base64 < ci-workflow.yml)"
+```
+
 ## Project Structure
 
 ```

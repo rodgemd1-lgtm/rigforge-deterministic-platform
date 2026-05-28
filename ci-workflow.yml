@@ -1,0 +1,76 @@
+# This is the CI workflow for RIGForge.
+# Due to GitHub OAuth scope restrictions, this file must be manually added
+# to the repository at .github/workflows/ci.yml
+#
+# To add it:
+#   1. Go to https://github.com/rodgemd1-lgtm/rigforge-deterministic-platform
+#   2. Create new file: .github/workflows/ci.yml
+#   3. Paste the contents below
+#   4. Commit directly to main
+#
+# OR from a personal access token with 'workflow' scope:
+#   gh api repos/rodgemd1-lgtm/rigforge-deterministic-platform/contents/.github/workflows/ci.yml \
+#     -X PUT -f message="ci: add CI workflow" -f content="$(base64 < ci-workflow.yml)"
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: |
+          pip install ruff
+          ruff check rigforge/ contracts/ || true
+
+      - name: Run GEV model tests
+        run: pytest contracts/v1/tests/ -v
+
+      - name: Run CLI tests
+        run: pytest rigforge/rigforge/tests/ -v
+
+      - name: Run full test suite
+        run: pytest -v
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build package
+        run: |
+          pip install build
+          python -m build
+
+      - name: Verify package
+        run: |
+          pip install dist/*.whl
+          rigforge version
