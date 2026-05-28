@@ -73,4 +73,4 @@ jobs:
       - name: Verify package
         run: |
           pip install dist/*.whl
-          rigforge version
+          rigforge --version

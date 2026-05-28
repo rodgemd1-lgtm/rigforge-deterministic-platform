@@ -61,7 +61,7 @@ rigforge verify
 rigforge contract
 
 # Print version
-rigforge version
+rigforge --version
 ```
 
 ## MCP Server — Use in Codex, Claude Code, OpenCode
