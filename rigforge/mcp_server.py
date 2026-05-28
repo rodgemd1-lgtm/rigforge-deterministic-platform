@@ -18,8 +18,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
-
 
 # ── Tool definitions ───────────────────────────────────────────────────
 
@@ -125,7 +123,6 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = 8765, services: list[st
     """
     try:
         from fastapi import FastAPI
-        from fastapi.responses import JSONResponse
     except ImportError:
         raise ImportError("MCP dependencies not installed. Run: pip install rigforge[mcp]")
 

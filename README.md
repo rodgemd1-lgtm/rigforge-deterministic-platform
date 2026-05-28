@@ -2,11 +2,13 @@
 
 RIGForge is a fully deterministic, phase-gated build system with:
 
-- **7 build phases** from bootstrap to cockpit, each sealed with proof packets
+- **7 build phases** from bootstrap to cockpit, each sealed with integrity-hashed `ProofPacket`s
 - **GEV (Generate-Evaluate-Verify) contract models** via `contracts/v1/`
-- **CLI entry-point** (`rigforge`) for status, run, seal, verify, and MCP serve
+- **Operator + agent CLI** (`rigforge init|doctor|status|run|seal|verify|contract|archon|review`) with `--json` everywhere
+- **`ArchonHarness`** orchestrator: plan → per-phase quality gates → seal
+- **`RunEnvelope` + `ExecutionLedger`** for deterministic, auditable runs
 - **MCP server** exposing contract tools for AI coding agents (Codex, Claude Code, OpenCode)
-- **30 tests** covering all 5 Pydantic models plus CLI and MCP server
+- **70+ tests** covering all 5 Pydantic models, the CLI, the harness, and the MCP server
 
 ## Phases
 
@@ -44,25 +46,56 @@ pip install -e ".[dev]"
 ## CLI Usage
 
 ```bash
-# Show phase status
+# Scaffold a new RIGForge project (proofs/, contracts/, ledger/, docs/, rigforge.yaml)
+rigforge init
+
+# Diagnose Python version, repo layout, contracts, CI, and lint readiness
+rigforge doctor
+
+# Show phase status (add --json for machine-readable output)
 rigforge status
+rigforge --json status
 
-# Run a phase
-rigforge run 1    # Bootstrap & Doctrine
-rigforge run 5    # GEV Loop + DoneContract
+# Run a phase's deterministic gate bundle
+rigforge run 1
+rigforge run 1 --dry-run         # plan only, no side effects
+rigforge --json run 1            # machine-readable
 
-# Seal a phase (creates proof packet)
-rigforge seal 1
+# Seal a phase with a ProofPacket (artifact hashes + RunEnvelope + gate evidence)
+rigforge seal 1 --artifact docs/PHASE1.md --evidence "bootstrap complete"
 
-# Verify all sealed phases
+# Verify all sealed phases (schema + integrity hash; --strict adds phase-order check)
 rigforge verify
+rigforge verify --strict --json
 
-# List contracts
-rigforge contract
+# Contract operations
+rigforge contract list
+rigforge contract create --studio strategy --lane BC-DEMO-V1 --out contracts/v1/demo.yaml
+rigforge contract validate contracts/v1/demo.yaml
+rigforge contract inspect  contracts/v1/demo.yaml
 
-# Print version
+# Archon harness
+rigforge archon plan 1
+rigforge archon run  1
+rigforge archon status
+
+# Self-review surfaces
+rigforge review        # questions + gaps + status snapshot
+rigforge questions     # 20 senior-agentic-engineering questions
+rigforge gaps          # tracked platform gaps
+
+# MCP server
+rigforge mcp-serve
+
+# Version
 rigforge --version
 ```
+
+### Global options
+
+* `--cwd PATH` — override project-root discovery (default: walk upward from `cwd`
+  looking for `rigforge.yaml`, `pyproject.toml`, or `.git/`).
+* `--json` — emit machine-readable JSON where the command supports it.
 
 ## MCP Server — Use in Codex, Claude Code, OpenCode
 
@@ -179,7 +212,7 @@ pytest
 pytest contracts/v1/tests/
 
 # Run only CLI/MCP tests
-pytest rigforge/rigforge/tests/
+pytest rigforge/tests/
 
 # Run with verbose output
 pytest -v
@@ -187,14 +220,10 @@ pytest -v
 
 ## GitHub Actions CI
 
-A CI workflow template is included at `ci-workflow.yml`. Due to GitHub OAuth scope restrictions on workflow files, you need to manually add it:
+A CI workflow is installed at `.github/workflows/ci.yml`. The same content is
+preserved at `ci-workflow.yml` (root) as a portable template if you need to
+re-install it manually (e.g. from an OAuth token without `workflow` scope):
 
-1. Go to the repository on GitHub
-2. Create `.github/workflows/ci.yml`
-3. Paste the contents of `ci-workflow.yml`
-4. Commit directly to `main`
-
-Or use a personal access token with `workflow` scope:
 ```bash
 gh api repos/OWNER/REPO/contents/.github/workflows/ci.yml \
   -X PUT -f message="ci: add CI workflow" -f content="$(base64 < ci-workflow.yml)"
@@ -203,33 +232,34 @@ gh api repos/OWNER/REPO/contents/.github/workflows/ci.yml \
 ## Project Structure
 
 ```
-rigforge/
+rigforge-deterministic-platform/
   rigforge/
     __init__.py          # Package root, version
     cli.py               # Click CLI entry-point (rigforge command)
+    context.py           # Project-root resolver
+    run_envelope.py      # RunEnvelope model (run identity + env snapshot)
+    proof.py             # ProofPacket model (artifact hashes + integrity hash)
+    ledger.py            # ExecutionLedger (append-only JSONL audit log)
+    gates.py             # Built-in quality gates + per-phase bundles
+    harness.py           # ArchonHarness (plan → run gates → seal)
+    questions.py         # 20 senior-agentic-engineering questions
+    gaps.py              # Tracked platform gaps
     mcp_server.py        # MCP server (FastAPI + contract tools)
     tests/
       test_cli.py         # CLI command tests
       test_mcp_server.py  # MCP server tool tests
+      test_platform.py    # ProofPacket/RunEnvelope/Ledger/Harness/Gates tests
   contracts/
     v1/
       __init__.py           # Package export of 5 models
-      models/
-        done_contract.py    # Top-level build contract
-        verifier_package.py # GEV triad model
-        required_artifact.py
-        acceptance_criterion.py
-        forbidden_action.py
-      schemas/
-        done_contract.yaml
-        verifier_package.yaml
-        required_artifact.yaml
-        acceptance_criterion.yaml
-        forbidden_action.yaml
+      models/               # Pydantic GEV models
+      schemas/              # YAML schema references
       tests/
         test_gev_models.py  # 30 tests for all 5 models
-  pyproject.toml           # Build config, dependencies, CLI entry-point
-  README.md                # This file
+  .github/workflows/ci.yml  # CI workflow
+  ci-workflow.yml           # Portable CI template (mirror of installed workflow)
+  pyproject.toml            # Build config, dependencies, CLI entry-point
+  README.md                 # This file
 ```
 
 ## License
