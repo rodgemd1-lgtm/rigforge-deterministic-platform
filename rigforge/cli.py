@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -850,7 +851,7 @@ def smoke(click_ctx: click.Context):
                 f"{tools_count} tools, {resources_count} resources, {prompts_count} prompts"
             ),
         ))
-    except Exception as exc:  # noqa: BLE001
+    except (ImportError, AttributeError, TypeError) as exc:
         checks.append(GateResult(
             name="mcp_catalogue",
             passed=False,
@@ -877,7 +878,7 @@ def smoke(click_ctx: click.Context):
             severity="advisory",
             detail=detail,
         ))
-    except Exception as exc:  # noqa: BLE001
+    except (ImportError, OSError, subprocess.SubprocessError) as exc:
         checks.append(GateResult(
             name="git_agent",
             passed=False,

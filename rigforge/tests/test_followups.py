@@ -436,7 +436,7 @@ class TestGapsClosed:
 
         open_ids = {g.id for g in GAPS}
         resolved_ids = {g.id for g in RESOLVED_GAPS}
-        assert "G004" in open_ids  # reproducibility gap still open
+        assert open_ids == {"G004", "G010"}  # exact open set: reproducibility + weekly_automation
         assert {"G001", "G002", "G003", "G005", "G006", "G007", "G008"} <= resolved_ids
         # V10 additions
         assert "G009" in resolved_ids  # git agent
