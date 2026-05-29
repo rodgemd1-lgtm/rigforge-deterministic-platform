@@ -43,7 +43,10 @@ jobs:
       - name: Run full test suite
         run: pytest -v
 
-      - name: rigforge doctor (smoke)
+      - name: rigforge smoke (V10 phase-0 check)
+        run: rigforge smoke
+
+      - name: rigforge doctor (full diagnostic)
         run: rigforge doctor || true
 
   build:

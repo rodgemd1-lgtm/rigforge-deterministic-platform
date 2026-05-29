@@ -22,6 +22,7 @@ class GapFinding:
 
 GAPS: tuple[GapFinding, ...] = (
     GapFinding("G004", "reproducibility", "advisory", "RunEnvelope captures Python/platform fingerprint but does not hash full dep lockfile."),
+    GapFinding("G010", "weekly_automation", "advisory", "Weekly improvement loop is not yet wired to a scheduler or GitHub Actions schedule trigger."),
 )
 
 
@@ -33,6 +34,9 @@ RESOLVED_GAPS: tuple[GapFinding, ...] = (
     GapFinding("G006", "signing", "soft", "ProofPacket HMAC-SHA256 signing; verify via `rigforge verify --require-signature`."),
     GapFinding("G007", "resume", "soft", "ArchonHarness.find_resumable / resume + `rigforge resume` re-runs the last failed/unfinished phase."),
     GapFinding("G008", "ui", "advisory", "Cockpit UI — FastAPI HTML view served by `rigforge cockpit` (HTML renderer is dep-free)."),
+    GapFinding("G009", "git_agent", "soft", "Read-only git introspection — rigforge.git_agent (git_status, git_log, git_changed_files) + gev.git_status MCP tool."),
+    GapFinding("G011", "mcp_resources", "soft", "MCP resources (rigforge://phases, contracts, gaps, git/status) + prompts (create_contract, review_phase, plan_v10) added."),
+    GapFinding("G012", "smoke", "soft", "Deterministic phase-0 smoke command: `rigforge smoke` — cheap, local, non-agentic, CI-ready."),
 )
 
 

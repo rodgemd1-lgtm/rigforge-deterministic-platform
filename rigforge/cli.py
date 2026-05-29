@@ -797,7 +797,9 @@ def mcp_serve(click_ctx: click.Context, host: str | None, port: int | None,
             host=bind_host, port=bind_port, services=service_list, auth_token=token,
         )
         click.echo(f"   MCP server ready at http://{bind_host}:{bind_port}")
-        click.echo("   Tools: gev.contract_create/validate/list, gev.phase_status, gev.proof_seal")
+        click.echo("   Tools: gev.contract_create/validate/list, gev.phase_status, gev.proof_seal, gev.git_status")
+        click.echo("   Resources: rigforge://phases, rigforge://contracts, rigforge://gaps, rigforge://git/status")
+        click.echo("   Prompts: create_contract, review_phase, plan_v10")
         click.echo("   Press Ctrl+C to stop.")
         import uvicorn
 
@@ -805,6 +807,101 @@ def mcp_serve(click_ctx: click.Context, host: str | None, port: int | None,
     except ImportError as exc:
         click.echo(f"⚠️  MCP dependencies not installed: {exc}")
         click.echo("   Install with: pip install rigforge[mcp]")
+        sys.exit(1)
+
+
+# ── smoke (V10 deterministic phase-0 check) ─────────────────────────────
+
+
+@main.command()
+@click.pass_context
+def smoke(click_ctx: click.Context):
+    """Deterministic phase-0 smoke check — cheap, local, non-agentic (V10).
+
+    Runs a fast bundle of checks suitable for Looper/Copilot to call before
+    making any edits.  Exits 0 when all hard-block gates pass; exits 1 on any
+    hard-block failure.
+
+    First deterministic smoke command::
+
+        rigforge smoke
+    """
+    ctx = _ctx(click_ctx)
+
+    # Core layout + environment gates (no network, no side effects)
+    checks: list[GateResult] = [
+        gate_python_version(),
+        gate_repo_layout(ctx),
+        gate_contracts_present(ctx),
+        gate_config_valid(ctx),
+    ]
+
+    # MCP server import check (no port binding)
+    try:
+        from rigforge.mcp_server import list_tools, list_resources, list_prompts
+        tools_count = len(list_tools())
+        resources_count = len(list_resources())
+        prompts_count = len(list_prompts())
+        checks.append(GateResult(
+            name="mcp_catalogue",
+            passed=True,
+            severity="advisory",
+            detail=(
+                f"{tools_count} tools, {resources_count} resources, {prompts_count} prompts"
+            ),
+        ))
+    except Exception as exc:  # noqa: BLE001
+        checks.append(GateResult(
+            name="mcp_catalogue",
+            passed=False,
+            severity="soft_block",
+            detail=str(exc),
+        ))
+
+    # Git agent check (read-only, no network)
+    try:
+        from rigforge.git_agent import git_status as _git_status
+        gs = _git_status(cwd=str(ctx.root))
+        if gs.available and gs.in_repo:
+            detail = f"branch={gs.branch}, commit={gs.commit_hash}, dirty={gs.dirty}"
+            passed = True
+        elif gs.available:
+            detail = "not inside a git repository"
+            passed = True  # advisory — not a hard requirement
+        else:
+            detail = gs.error or "git not available"
+            passed = True  # advisory
+        checks.append(GateResult(
+            name="git_agent",
+            passed=passed,
+            severity="advisory",
+            detail=detail,
+        ))
+    except Exception as exc:  # noqa: BLE001
+        checks.append(GateResult(
+            name="git_agent",
+            passed=False,
+            severity="advisory",
+            detail=str(exc),
+        ))
+
+    blocking_failed = [c for c in checks if not c.passed and c.severity == HARD_BLOCK]
+    payload = {
+        "root": str(ctx.root),
+        "ok": not blocking_failed,
+        "checks": [c.to_dict() for c in checks],
+    }
+
+    def render():
+        click.echo(f"🔥 RIGForge smoke — {ctx.root}")
+        for c in checks:
+            icon = "✅" if c.passed else ("❌" if c.severity == HARD_BLOCK else "⚠️")
+            click.echo(f"  {icon} {c.name:24s} [{c.severity:11s}] {c.detail}")
+        click.echo()
+        click.echo("✅ Smoke OK." if not blocking_failed else "❌ Smoke: hard-block failures detected.")
+
+    _emit(click_ctx, render, payload)
+    if blocking_failed:
         sys.exit(1)
 
 

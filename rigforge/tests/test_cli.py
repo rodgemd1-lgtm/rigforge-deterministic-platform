@@ -219,3 +219,37 @@ class TestMCPHelp:
         result = runner.invoke(main, ["mcp-serve", "--help"])
         assert result.exit_code == 0
         assert "MCP" in result.output or "mcp" in result.output.lower()
+
+
+# ── smoke command (V10) ─────────────────────────────────────────────────
+
+
+class TestSmoke:
+    def test_smoke_runs(self, runner, project):
+        result = _invoke(runner, project, "smoke")
+        assert result.exit_code == 0
+        assert "smoke" in result.output.lower()
+
+    def test_smoke_shows_gates(self, runner, project):
+        result = _invoke(runner, project, "smoke")
+        assert "python_version" in result.output
+        assert "repo_layout" in result.output
+        assert "mcp_catalogue" in result.output
+        assert "git_agent" in result.output
+
+    def test_smoke_ok_message(self, runner, project):
+        result = _invoke(runner, project, "smoke")
+        assert "Smoke OK" in result.output or "smoke" in result.output.lower()
+
+    def test_smoke_json_mode(self, runner, project):
+        result = _invoke(runner, project, "--json", "smoke")
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "ok" in data
+        assert "checks" in data
+        assert isinstance(data["checks"], list)
+
+    def test_smoke_help(self, runner):
+        result = runner.invoke(main, ["smoke", "--help"])
+        assert result.exit_code == 0
+        assert "smoke" in result.output.lower()

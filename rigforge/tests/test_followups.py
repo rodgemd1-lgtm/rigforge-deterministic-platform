@@ -436,8 +436,12 @@ class TestGapsClosed:
 
         open_ids = {g.id for g in GAPS}
         resolved_ids = {g.id for g in RESOLVED_GAPS}
-        assert open_ids == {"G004"}
+        assert "G004" in open_ids  # reproducibility gap still open
         assert {"G001", "G002", "G003", "G005", "G006", "G007", "G008"} <= resolved_ids
+        # V10 additions
+        assert "G009" in resolved_ids  # git agent
+        assert "G011" in resolved_ids  # mcp resources + prompts
+        assert "G012" in resolved_ids  # smoke command
 
     def test_cli_gaps_all_flag(self):
         from click.testing import CliRunner

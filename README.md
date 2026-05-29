@@ -5,13 +5,16 @@ RIGForge is a fully deterministic, phase-gated build system with:
 - **7 build phases** from bootstrap to cockpit, each sealed with integrity-hashed `ProofPacket`s
 - **HMAC-SHA256 signed proof packets** (G006) — `rigforge verify --require-signature`
 - **GEV (Generate-Evaluate-Verify) contract models** via `contracts/v1/`
-- **Operator + agent CLI** (`rigforge init|doctor|status|run|seal|verify|contract|archon|review|resume|cockpit`) with `--json` everywhere
+- **Operator + agent CLI** (`rigforge smoke|init|doctor|status|run|seal|verify|contract|archon|review|resume|cockpit`) with `--json` everywhere
 - **`ArchonHarness`** orchestrator with parallel multi-agent gate scheduling (G002), runtime cost/token budget enforcement (G005), and automatic resume of failed runs (G007)
 - **`RunEnvelope` + `ExecutionLedger`** for deterministic, auditable runs
 - **Typed `rigforge.yaml`** loader (`rigforge.config.RigForgeConfig`) wiring budgets, signing keys, MCP auth, scheduler, and cockpit settings
 - **MCP server** with both HTTP (bearer-token authn, G003) and stdio JSON-RPC transports (G001) for AI coding agents (Codex, Claude Code, OpenCode)
+- **MCP resources** (`rigforge://phases`, `rigforge://contracts`, `rigforge://gaps`, `rigforge://git/status`) for agent data access
+- **MCP prompts** (`create_contract`, `review_phase`, `plan_v10`) for guided agent workflows
+- **Git agent** (G009) — read-only `rigforge.git_agent` module + `gev.git_status` MCP tool (credentials scrubbed)
 - **Cockpit UI** (G008) — `rigforge cockpit` serves an HTML mission-control view
-- **110+ tests** covering models, CLI, harness, scheduler, budgets, signing, resume, cockpit, and both MCP transports
+- **160+ tests** covering models, CLI, harness, scheduler, budgets, signing, resume, cockpit, MCP transports, resources, prompts, and git agent
 
 ## Phases
 
@@ -49,6 +52,9 @@ pip install -e ".[dev]"
 ## CLI Usage
 
 ```bash
+# ── V10 first command (phase-0 smoke check — cheap, local, non-agentic) ──
+rigforge smoke
+
 # Scaffold a new RIGForge project (proofs/, contracts/, ledger/, docs/, rigforge.yaml)
 rigforge init
 
@@ -94,7 +100,8 @@ rigforge archon status
 # Self-review surfaces
 rigforge review        # questions + gaps + status snapshot
 rigforge questions     # 20 senior-agentic-engineering questions
-rigforge gaps          # tracked platform gaps
+rigforge gaps          # tracked platform gaps (open only)
+rigforge gaps --all    # open + resolved gaps
 
 # MCP server (HTTP transport; supports --auth-token / RIGFORGE_MCP_TOKEN, G003)
 rigforge mcp-serve
@@ -156,6 +163,28 @@ rigforge mcp-serve --host 127.0.0.1 --port 9000
 | `gev.contract_list` | List all contract YAML files |
 | `gev.phase_status` | Get phase seal status (all or single) |
 | `gev.proof_seal` | Seal a phase with a proof packet |
+| `gev.git_status` | Read-only git repository state (branch, commit, dirty flag) |
+
+### MCP Resources
+
+Resources are exposed at `rigforge://<name>` and can be read by agent clients:
+
+| Resource URI | Description |
+|-------------|-------------|
+| `rigforge://phases` | Current seal status for all 7 phases |
+| `rigforge://contracts` | List of DoneContract YAML files |
+| `rigforge://gaps` | Open + resolved platform gaps |
+| `rigforge://git/status` | Current git state (credentials scrubbed) |
+
+### MCP Prompts
+
+Prompt templates for guided agent workflows:
+
+| Prompt | Description |
+|--------|-------------|
+| `create_contract` | Guided DoneContract authoring template |
+| `review_phase` | Phase readiness review template |
+| `plan_v10` | V10 planning template for Looper/Copilot agents |
 
 ### Adding to AI Agent Config
 
