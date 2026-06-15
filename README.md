@@ -1,6 +1,26 @@
-# RIGForge — Deterministic 7-Phase Agentic Engineering Platform
+# RIGForge
 
-RIGForge is a fully deterministic, phase-gated build system with:
+**A deterministic, phase-gated build system for agentic engineering.** Every build moves through explicit phases, each sealed with an integrity-hashed — optionally HMAC-signed — `ProofPacket`. "Done" becomes something you can re-verify with a command, not something an agent claims in a chat.
+
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg) ![Tests](https://img.shields.io/badge/tests-110%2B%20passing-brightgreen.svg) ![Status](https://img.shields.io/badge/status-beta-orange.svg)
+
+## The problem
+
+AI coding agents are fast and confident — and that's exactly the risk. They report success they didn't earn, skip the gate that would've caught the failure, and leave no trail to prove what actually ran. When an agent says "done," you have its word and nothing behind it.
+
+RIGForge replaces the agent's word with proof. Work flows through 7 explicit phases; each phase runs a deterministic bundle of quality gates; passing a phase seals a `ProofPacket` that hashes every artifact and records the exact run environment. Verification is a command, not a vibe:
+
+```bash
+rigforge verify --strict --require-signature
+```
+
+## Who it's for
+
+- **Eng leads** who need agent output to be auditable before it merges.
+- **Platform teams** wiring AI agents (Claude Code, Codex, OpenCode) into a governed pipeline over MCP.
+- **Anyone** who wants "the build passed" to mean a signed, re-checkable artifact — not a message in a thread.
+
+## What you get
 
 - **7 build phases** from bootstrap to cockpit, each sealed with integrity-hashed `ProofPacket`s
 - **HMAC-SHA256 signed proof packets** (G006) — `rigforge verify --require-signature`
