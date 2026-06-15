@@ -31,4 +31,8 @@ htmlcov/
 proofs/
 
 # Ruff
-.ruff_cache/
+.ruff_cache/node_modules/
+.next/
+*.log
+.turbo/
+.cache/
