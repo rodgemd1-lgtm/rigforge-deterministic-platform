@@ -274,8 +274,8 @@ ProofPacket
 ├── schema_version, phase, name, status, sealed_at
 ├── verifier            (no anonymous seals — who sealed it)
 ├── evidence            (human-readable "why this phase is done")
-├── artifacts: [ArtifactRecord]   (path, sha256, size_bytes, exists)
-├── gates:     [GateOutcome]      (name, passed, severity, detail)
+├── artifacts: [ArtifactRecord]   (path, sha256, size_bytes, exists, kind)
+├── gates:     [GateOutcome]      (name, passed, severity, detail, kind, model?)
 ├── run_envelope: RunEnvelope
 ├── packet_sha256       (self-integrity hash)
 └── signature           (HMAC-SHA256 over packet_sha256, optional, G006)
@@ -287,6 +287,20 @@ ProofPacket
 and records its size. Paths are stored relative to the project root. A missing
 artifact is recorded as `exists=False` with an empty hash rather than crashing —
 the absence is itself evidence.
+
+### 7.1a Determinism honesty qualifier (G012)
+
+Every artifact and gate carries a `kind`: `deterministic` or `llm-stochastic`.
+This is the platform refusing to overstate its own guarantee. RIGForge's hashes
+are **byte-identical for deterministic steps; llm-stochastic steps are recorded
+with model+seed for reproducibility** — not bit-for-bit. A deterministic step
+(Python version, repo layout, ruff) re-runs to the same hash. A step that calls
+an LLM does not: re-running it can produce a different output and therefore a
+different hash even with identical inputs. So a `llm-stochastic` `GateOutcome`
+pins a `ModelMetadata` (`model_id`, `version`, `temperature`, `seed`) instead of
+pretending the hash is reproducible. The exported constant
+`rigforge.proof.BYTE_IDENTICAL_CLAIM` carries this exact one-line qualifier so
+docs and code never silently claim a bare "byte-identical".
 
 ### 7.2 Integrity & signing
 

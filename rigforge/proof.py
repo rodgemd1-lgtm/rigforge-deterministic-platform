@@ -21,13 +21,47 @@ import hmac
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from rigforge.run_envelope import RunEnvelope
 
 
-PROOF_SCHEMA_VERSION = "1.1.0"
+PROOF_SCHEMA_VERSION = "1.2.0"
+
+# Determinism honesty qualifier (G012).
+#
+# RIGForge's hashes are byte-identical ONLY for deterministic steps. A step that
+# calls an LLM is ``llm-stochastic``: re-running it can produce a different
+# output (and therefore a different artifact hash) even with identical inputs.
+# We do NOT pretend those hashes are reproducible — instead each stochastic step
+# records the model id + version + temperature + seed so the run is auditable and
+# reproducible *to the extent the provider's seed allows*, not byte-identical.
+StepKind = Literal["deterministic", "llm-stochastic"]
+
+# The one-line, honest qualifier used wherever the docs/code would otherwise
+# claim a bare "byte-identical". Import this instead of hand-writing the claim.
+BYTE_IDENTICAL_CLAIM = (
+    "byte-identical for deterministic steps; "
+    "llm-stochastic steps are recorded with model+seed for reproducibility"
+)
+
+
+class ModelMetadata(BaseModel):
+    """Per-step record of the LLM that produced a stochastic step.
+
+    Graceful by design: when a step makes no LLM call this is simply absent
+    (``None``). When it does, we pin enough to reproduce the call as far as the
+    provider allows — id, version, temperature, and seed.
+    """
+
+    model_config = {"protected_namespaces": ()}
+
+    model_id: str = Field(..., description="Provider model id, e.g. 'sonnet' or 'gpt-5.2'.")
+    version: str | None = Field(default=None, description="Model version/snapshot string.")
+    temperature: float | None = Field(default=None, description="Sampling temperature used.")
+    seed: int | None = Field(default=None, description="Seed passed to the provider, if any.")
 
 
 class ArtifactRecord(BaseModel):
@@ -37,26 +71,50 @@ class ArtifactRecord(BaseModel):
     sha256: str
     size_bytes: int
     exists: bool = True
+    kind: StepKind = Field(
+        default="deterministic",
+        description="Whether this artifact is byte-reproducible or LLM-stochastic.",
+    )
 
     @classmethod
-    def from_path(cls, path: Path, base: Path | None = None) -> "ArtifactRecord":
+    def from_path(
+        cls, path: Path, base: Path | None = None, *, kind: StepKind = "deterministic"
+    ) -> "ArtifactRecord":
         """Build a record by hashing the file on disk."""
         rel = str(path.relative_to(base)) if base is not None and path.is_absolute() else str(path)
         if not path.exists():
-            return cls(path=rel, sha256="", size_bytes=0, exists=False)
+            return cls(path=rel, sha256="", size_bytes=0, exists=False, kind=kind)
         h = hashlib.sha256()
         data = path.read_bytes()
         h.update(data)
-        return cls(path=rel, sha256=h.hexdigest(), size_bytes=len(data), exists=True)
+        return cls(path=rel, sha256=h.hexdigest(), size_bytes=len(data), exists=True, kind=kind)
 
 
 class GateOutcome(BaseModel):
-    """Evidence that a specific quality gate ran."""
+    """Evidence that a specific quality gate (step) ran.
+
+    Each gate is a *step* in the phase. A deterministic gate is byte-reproducible;
+    a step that invokes an LLM is ``llm-stochastic`` and records the model that
+    produced it (id, version, temperature, seed) so the run can be diffed and
+    reproduced to the extent the provider's seed allows.
+    """
 
     name: str
     passed: bool
     severity: str = "hard_block"
     detail: str | None = None
+    kind: StepKind = Field(
+        default="deterministic",
+        description="'deterministic' (byte-reproducible) or 'llm-stochastic'.",
+    )
+    model: ModelMetadata | None = Field(
+        default=None,
+        description="LLM metadata when this step called a model; None for deterministic steps.",
+    )
+
+    @property
+    def is_stochastic(self) -> bool:
+        return self.kind == "llm-stochastic"
 
 
 class ProofPacket(BaseModel):

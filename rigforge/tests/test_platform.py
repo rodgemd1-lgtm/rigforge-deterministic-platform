@@ -11,7 +11,13 @@ from rigforge.context import ProjectContext
 from rigforge.gates import gate_python_version, gate_repo_layout, gates_for_phase, HARD_BLOCK
 from rigforge.harness import ArchonHarness
 from rigforge.ledger import ExecutionLedger
-from rigforge.proof import ArtifactRecord, ProofPacket
+from rigforge.proof import (
+    ArtifactRecord,
+    BYTE_IDENTICAL_CLAIM,
+    GateOutcome,
+    ModelMetadata,
+    ProofPacket,
+)
 from rigforge.run_envelope import RunEnvelope
 
 
@@ -105,6 +111,57 @@ class TestProofPacket:
         loaded = ProofPacket.load(path)
         assert loaded.phase == 1
         assert loaded.schema_version == "0.0.0"
+
+
+# ── Determinism honesty qualifier (G012) ────────────────────────────────
+
+
+class TestDeterminismQualifier:
+    def test_steps_default_to_deterministic(self, tmp_path):
+        f = tmp_path / "a.txt"
+        f.write_text("x")
+        rec = ArtifactRecord.from_path(f, base=tmp_path)
+        gate = GateOutcome(name="lint", passed=True)
+        assert rec.kind == "deterministic"
+        assert gate.kind == "deterministic"
+        assert gate.model is None
+        assert gate.is_stochastic is False
+
+    def test_stochastic_step_is_tagged_and_records_model_and_seed(self, tmp_path):
+        f = tmp_path / "gen.txt"
+        f.write_text("llm output")
+        art = ArtifactRecord.from_path(f, base=tmp_path, kind="llm-stochastic")
+        gate = GateOutcome(
+            name="generate",
+            passed=True,
+            kind="llm-stochastic",
+            model=ModelMetadata(model_id="sonnet", version="2025-09", temperature=0.7, seed=42),
+        )
+        # The stochastic step is tagged...
+        assert art.kind == "llm-stochastic"
+        assert gate.kind == "llm-stochastic"
+        assert gate.is_stochastic is True
+        # ...and records the model + seed for reproducibility.
+        assert gate.model is not None
+        assert gate.model.model_id == "sonnet"
+        assert gate.model.seed == 42
+        # The packet round-trips the tag + model through JSON.
+        packet = ProofPacket(
+            phase=1, name="Build", verifier="alice", artifacts=[art], gates=[gate]
+        ).sealed()
+        path = tmp_path / "proof.json"
+        packet.write(path)
+        loaded = ProofPacket.load(path)
+        assert loaded.gates[0].kind == "llm-stochastic"
+        assert loaded.gates[0].model.seed == 42
+        assert loaded.artifacts[0].kind == "llm-stochastic"
+
+    def test_byte_identical_claim_is_qualified_not_absolute(self):
+        # The exported claim string must NOT be a bare absolute "byte-identical";
+        # it must qualify it to deterministic steps and name the stochastic path.
+        assert "byte-identical for deterministic steps" in BYTE_IDENTICAL_CLAIM
+        assert "llm-stochastic" in BYTE_IDENTICAL_CLAIM
+        assert "seed" in BYTE_IDENTICAL_CLAIM
 
 
 # ── ExecutionLedger ────────────────────────────────────────────────────

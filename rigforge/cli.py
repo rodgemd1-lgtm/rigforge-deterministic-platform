@@ -10,6 +10,7 @@ Top-level commands::
     rigforge run PHASE [--dry-run] [--json]
     rigforge seal PHASE [--artifact PATH ...] [--evidence TEXT]
     rigforge verify [--strict] [--json]
+    rigforge diff PROOF_A.json PROOF_B.json   # MODEL-DIFF two ProofPackets
     rigforge contract list|validate|create|inspect
     rigforge archon  plan|run|status
     rigforge review                     # show questions, gaps, status snapshot
@@ -460,6 +461,38 @@ def demo(click_ctx: click.Context):
     # cryptographic invariant ever breaks, fail loudly rather than lie.
     if not result.forgery_caught:
         sys.exit(1)
+
+
+# ── diff (MODEL-DIFF between two ProofPackets) ───────────────────────────
+
+
+@main.command("diff")
+@click.argument("proof_a", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("proof_b", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.pass_context
+def diff(click_ctx: click.Context, proof_a: Path, proof_b: Path):
+    """Diff two ProofPackets: what steps/gates, hashes, and models differ.
+
+    Reads two sealed ``ProofPacket`` JSON files (A = before, B = after) and
+    renders what diverged between the runs — which gates flipped, which artifact
+    hashes changed, and which model produced each ``llm-stochastic`` step
+    (id → id, output hash a → b, score/pass changes). Read-only; exits 0.
+    """
+    from rigforge.diff import diff_packets, render_diff
+
+    packet_a = ProofPacket.load(proof_a)
+    packet_b = ProofPacket.load(proof_b)
+    result = diff_packets(packet_a, packet_b)
+    payload = {
+        "a": str(proof_a),
+        "b": str(proof_b),
+        **result.to_dict(),
+    }
+    _emit(
+        click_ctx,
+        lambda: render_diff(result, label_a=str(proof_a), label_b=str(proof_b)),
+        payload,
+    )
 
 
 # ── contract group ──────────────────────────────────────────────────────
