@@ -46,6 +46,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rigforge", "contracts"]
+# The vanilla SPA assets (index.html / app.js / style.css) ship inside the
+# wheel so ``rigforge serve`` works from an installed package, not just a
+# source checkout.
+force-include = { "rigforge/web" = "rigforge/web" }
 
 [tool.pytest.ini_options]
 testpaths = ["rigforge/tests", "contracts/v1/tests"]

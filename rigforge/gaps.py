@@ -33,6 +33,8 @@ RESOLVED_GAPS: tuple[GapFinding, ...] = (
     GapFinding("G006", "signing", "soft", "ProofPacket HMAC-SHA256 signing; verify via `rigforge verify --require-signature`."),
     GapFinding("G007", "resume", "soft", "ArchonHarness.find_resumable / resume + `rigforge resume` re-runs the last failed/unfinished phase."),
     GapFinding("G008", "ui", "advisory", "Cockpit UI — FastAPI HTML view served by `rigforge cockpit` (HTML renderer is dep-free)."),
+    GapFinding("G009", "registry", "soft", "Capability registry — register plugin gates via @capability; harness runs them in the phase pipeline (`rigforge capabilities`)."),
+    GapFinding("G010", "harness", "soft", "Goal harness — converge-until-proven phase loop bounded by budgets/iterations (`rigforge goal`)."),
 )
 
 

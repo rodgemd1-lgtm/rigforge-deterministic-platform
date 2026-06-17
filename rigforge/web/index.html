@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RIGForge Cockpit</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">◆</span>
+      <div>
+        <h1>RIGForge Cockpit</h1>
+        <p class="subtitle" id="root-path">deterministic 7-phase engineering platform</p>
+      </div>
+    </div>
+    <div class="auth">
+      <span class="dot" id="conn-dot" title="connection"></span>
+      <input id="token" type="password" placeholder="bearer token (if required)" autocomplete="off" />
+      <button id="refresh" type="button">Refresh</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel summary" aria-label="Verification summary">
+      <div class="stat">
+        <span class="stat-label">Phases sealed</span>
+        <span class="stat-value" id="stat-sealed">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Integrity</span>
+        <span class="stat-value" id="stat-integrity">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Signed</span>
+        <span class="stat-value" id="stat-signed">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Verify</span>
+        <span class="stat-value" id="stat-verify">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Contracts</span>
+        <span class="stat-value" id="stat-contracts">—</span>
+      </div>
+    </section>
+
+    <div class="grid">
+      <section class="panel phases" aria-label="Phases">
+        <div class="panel-head">
+          <h2>Phases</h2>
+          <span class="hint">run · seal · inspect proof</span>
+        </div>
+        <div id="phases"></div>
+      </section>
+
+      <section class="panel ledger" aria-label="Live ledger feed">
+        <div class="panel-head">
+          <h2>Live ledger</h2>
+          <span class="hint" id="ledger-status">connecting…</span>
+        </div>
+        <ul id="ledger-feed" class="feed"></ul>
+      </section>
+    </div>
+
+    <section class="panel proof-panel" id="proof-panel" hidden aria-label="Proof detail">
+      <div class="panel-head">
+        <h2>Proof <span id="proof-phase"></span></h2>
+        <button id="proof-close" type="button" class="ghost">close</button>
+      </div>
+      <pre id="proof-json"></pre>
+    </section>
+  </main>
+
+  <footer>
+    <span id="toast" class="toast" role="status" aria-live="polite"></span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

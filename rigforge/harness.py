@@ -11,8 +11,12 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rigforge.context import ProjectContext
+
+if TYPE_CHECKING:  # pragma: no cover — typing-only import to avoid a cycle
+    from rigforge.registry import CapabilityRegistry
 from rigforge.config import RigForgeConfig, load_config
 from rigforge.gates import (
     GateResult,
@@ -112,6 +116,7 @@ class ArchonHarness:
         ledger: ExecutionLedger | None = None,
         *,
         config: RigForgeConfig | None = None,
+        registry: "CapabilityRegistry | None" = None,
     ):
         self.ctx = ctx
         self.ledger = ledger or ExecutionLedger(ctx.ledger_file)
@@ -125,12 +130,25 @@ class ArchonHarness:
             max_cost_usd=self.config.budgets.max_cost_usd,
             max_tokens=self.config.budgets.max_tokens,
         )
+        # The capability registry is the extensibility seam (G009): registered
+        # plugin gates run inside the phase pipeline after the built-in gates.
+        # Default to the process-wide REGISTRY so ``@capability``-decorated
+        # plugins are picked up; tests inject an isolated registry.
+        from rigforge.registry import REGISTRY
+
+        # Explicit None check: an empty CapabilityRegistry is falsy via __len__,
+        # so ``registry or REGISTRY`` would silently discard an injected empty one.
+        self.registry: "CapabilityRegistry" = REGISTRY if registry is None else registry
 
     # ── Planning ───────────────────────────────────────────────────────
 
     def plan(self, phase: int) -> list[PlanStep]:
         gates = gates_for_phase(self.ctx, phase)
         steps = [PlanStep(name=g.name, description=f"Run gate: {g.name}") for g in gates]
+        for cap in self.registry.for_phase(phase):
+            steps.append(
+                PlanStep(name=cap.name, description=f"Run capability: {cap.name} [{cap.severity}]")
+            )
         steps.append(PlanStep(name="seal", description=f"Seal phase {phase} with ProofPacket"))
         return steps
 
@@ -181,7 +199,11 @@ class ArchonHarness:
         """
         from rigforge.gates import gate_thunks_for_phase
 
-        thunks = gate_thunks_for_phase(self.ctx, phase)
+        # Built-in gates first, then registered capabilities (G009). Order is
+        # preserved in the returned list regardless of parallelism so proofs
+        # stay deterministic.
+        thunks = list(gate_thunks_for_phase(self.ctx, phase))
+        thunks += self.registry.thunks_for_phase(self.ctx, phase)
         parallel = self.config.resolve_parallelism()
         if parallel <= 1 or len(thunks) <= 1:
             return [thunk() for thunk in thunks]

@@ -774,6 +774,165 @@ def cockpit(click_ctx: click.Context, host: str | None, port: int | None, print_
     uvicorn.run(app, host=bind_host, port=bind_port)
 
 
+# ── capability registry (G009) ──────────────────────────────────────────
+
+
+@main.command("capabilities")
+@click.pass_context
+def capabilities(click_ctx: click.Context):
+    """List registered capabilities (plugin gates) in the active registry.
+
+    Capabilities are discovered from ``RIGFORGE_CAPABILITY_MODULES`` (a
+    comma-separated list of importable modules whose ``@capability``
+    decorators register into the process-wide registry).
+    """
+    from rigforge.registry import REGISTRY, discover_from_env
+
+    imported = discover_from_env()
+    payload = {"imported_modules": imported, "capabilities": REGISTRY.as_dicts()}
+
+    def render():
+        click.echo("🧩 Registered capabilities")
+        if imported:
+            click.echo(f"   (discovered from: {', '.join(imported)})")
+        if not REGISTRY.all():
+            click.echo("  (none registered — set RIGFORGE_CAPABILITY_MODULES to load plugins)")
+        for cap in REGISTRY.all():
+            scope = "all" if cap.phases == "*" else ",".join(str(p) for p in cap.phases)
+            click.echo(f"  • {cap.name:24s} [{cap.severity:11s}] phases={scope}  {cap.description}")
+
+    _emit(click_ctx, render, payload)
+
+
+# ── goal harness (G010) ─────────────────────────────────────────────────
+
+
+@main.command("goal")
+@click.option("--phases", "phases_csv", default=None,
+              help="Comma-separated phases to drive (e.g. '1,2'). Default: 1..--up-to.")
+@click.option("--up-to", "up_to", type=click.IntRange(1, 7), default=None,
+              help="Drive phases 1..N (ignored if --phases is given).")
+@click.option("--done-artifact", "done_artifact", type=click.Path(path_type=Path), default=None,
+              help="Done-condition: this artifact must exist for the goal to be proven.")
+@click.option("--max-iterations", default=5, type=click.IntRange(1, 100),
+              help="Hard cap on convergence passes (default 5).")
+@click.option("--cost-per-iteration", default=0.0, type=float,
+              help="Cost (USD) charged to the budget per pass (G005 enforcement).")
+@click.option("--tokens-per-iteration", default=0, type=int,
+              help="Tokens charged to the budget per pass (G005 enforcement).")
+@click.pass_context
+def goal(click_ctx: click.Context, phases_csv: str | None, up_to: int | None,
+         done_artifact: Path | None, max_iterations: int,
+         cost_per_iteration: float, tokens_per_iteration: int):
+    """Converge-until-proven: drive phases until the done-condition is proven (G010).
+
+    The done-condition is: every targeted phase runs without blocking failures
+    AND (if --done-artifact is given) that artifact exists. On success the
+    final phase is sealed with a ProofPacket. The loop is bounded by
+    --max-iterations and the cost/token budget, so it can never spin forever.
+    """
+    ctx = _ctx(click_ctx)
+    from rigforge.goal import GoalHarness
+
+    if phases_csv:
+        phase_list = [int(p.strip()) for p in phases_csv.split(",") if p.strip()]
+    elif up_to is not None:
+        phase_list = list(range(1, up_to + 1))
+    else:
+        phase_list = [1]
+    for p in phase_list:
+        if not 1 <= p <= 7:
+            click.echo(f"❌ phase {p} out of range (1-7)")
+            sys.exit(2)
+
+    if done_artifact is not None:
+        target = done_artifact
+
+        def done_check(c: ProjectContext) -> bool:
+            return target.exists()
+    else:
+        def done_check(c: ProjectContext) -> bool:
+            return True  # done == all phases ran clean
+
+    verifier = _verifier_identity()
+    gh = GoalHarness(ctx)
+    result = gh.converge(
+        phases=phase_list,
+        done_check=done_check,
+        verifier=verifier,
+        max_iterations=max_iterations,
+        cost_per_iteration=cost_per_iteration,
+        tokens_per_iteration=tokens_per_iteration,
+    )
+    payload = result.to_dict()
+
+    def render():
+        click.echo(f"🎯 Goal harness over phases {phase_list}")
+        for it in result.iterations:
+            tag = "✅ done" if it.done else (
+                f"❌ blocked@{it.blocked_phase}" if it.blocked_phase else "↻ pass"
+            )
+            click.echo(f"  iteration {it.index}: {tag} "
+                       f"(cost=${it.cost_usd:.4f} tokens={it.tokens})")
+        click.echo()
+        if result.proven:
+            sha = result.proof.packet_sha256[:12] if result.proof else "—"
+            click.echo(f"✅ Goal proven in {result.iteration_count} iteration(s). "
+                       f"Sealed phase {phase_list[-1]} sha256={sha}…")
+        else:
+            click.echo(f"❌ Goal not proven (stop_reason={result.stop_reason}, "
+                       f"{result.iteration_count} iteration(s)).")
+
+    _emit(click_ctx, render, payload)
+    if not result.proven:
+        sys.exit(1)
+
+
+# ── full-stack cockpit (G011) ────────────────────────────────────────────
+
+
+@main.command("serve")
+@click.option("--host", default=None, help="Override cockpit bind host (default 127.0.0.1).")
+@click.option("--port", default=None, type=int, help="Override cockpit bind port.")
+@click.option("--auth-token", default=None,
+              help="Bearer token required for /api/* (reuses the MCP token logic). "
+                   "Falls back to RIGFORGE_MCP_TOKEN / rigforge.yaml.")
+@click.option("--require-auth", is_flag=True, default=False,
+              help="Refuse to start without a token (off by default for the local dashboard).")
+@click.pass_context
+def serve(click_ctx: click.Context, host: str | None, port: int | None,
+          auth_token: str | None, require_auth: bool):
+    """Boot the full-stack cockpit: REST API + single-page app (G011)."""
+    ctx = _ctx(click_ctx)
+    from rigforge.config import load_config
+
+    cfg = load_config(ctx)
+    bind_host = host or cfg.cockpit.host
+    bind_port = port or cfg.cockpit.port
+    token = auth_token if auth_token is not None else cfg.resolve_mcp_token(ctx.root)
+
+    try:
+        from rigforge.webapp import build_app
+        from rigforge.mcp_server import MCPInsecureBindError
+
+        try:
+            app = build_app(ctx, auth_token=token, allow_insecure=not require_auth)
+        except MCPInsecureBindError as exc:
+            click.echo(f"❌ {exc}")
+            sys.exit(2)
+        import uvicorn
+    except ImportError as exc:
+        click.echo(f"⚠️  Cockpit dependencies not installed: {exc}")
+        click.echo("   Install with: pip install rigforge[mcp]")
+        sys.exit(1)
+
+    click.echo(f"🛸  RIGForge full-stack cockpit at http://{bind_host}:{bind_port}/")
+    click.echo(f"    API: /api/status /api/phases /api/verify /api/contracts "
+               f"/api/proof/{{n}} /api/ledger/stream")
+    click.echo(f"    Auth: {'bearer-token required' if token else 'open (local dashboard)'}")
+    uvicorn.run(app, host=bind_host, port=bind_port)
+
+
 # ── MCP server ──────────────────────────────────────────────────────────
 
 
