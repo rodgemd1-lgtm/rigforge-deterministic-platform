@@ -30,6 +30,10 @@ from rigforge.context import ProjectContext
 
 CONFIG_SCHEMA_VERSION = "1.1.0"
 
+# Conventional location for the auto-generated per-project signing key (G006).
+# Gitignored so the key never leaves the machine.
+DEFAULT_SIGNING_KEY_PATH = Path(".rigforge") / "signing.key"
+
 
 class BudgetConfig(BaseModel):
     """Hard ceilings the harness enforces at runtime (see G005)."""
@@ -42,7 +46,9 @@ class BudgetConfig(BaseModel):
 class MCPConfig(BaseModel):
     """Configuration for ``rigforge mcp-serve``."""
 
-    host: str = "0.0.0.0"
+    # Bind to loopback by default (G003): exposing the contract-tool RPC surface
+    # on a routable interface must be a deliberate, explicit choice.
+    host: str = "127.0.0.1"
     port: int = Field(default=8765, ge=1, le=65535)
     transport: str = Field(default="http", description="http | stdio")
     services: list[str] = Field(
@@ -69,12 +75,19 @@ class SchedulerConfig(BaseModel):
 
 
 class SigningConfig(BaseModel):
-    """Cryptographic signing of ProofPackets (G006)."""
+    """Cryptographic signing of ProofPackets (G006).
 
-    enabled: bool = False
+    Signing is **on by default**: ``rigforge init`` auto-generates a per-project
+    key at ``.rigforge/signing.key`` (gitignored). When no key can be resolved
+    the harness falls back gracefully to unsigned seals so existing projects
+    keep working, but a configured key makes tampering detectable.
+    """
+
+    enabled: bool = True
     key_file: str | None = None
     # If both ``key`` and ``key_file`` are unset and ``enabled`` is True,
-    # the env var ``RIGFORGE_SIGNING_KEY`` is consulted at sign time.
+    # the env var ``RIGFORGE_SIGNING_KEY`` then the conventional
+    # ``.rigforge/signing.key`` are consulted at sign time.
     require_on_verify: bool = False
 
 
@@ -118,6 +131,11 @@ class RigForgeConfig(BaseModel):
                 p = root / p
             if p.exists():
                 return p.read_bytes().strip()
+        # Conventional auto-generated key (written by ``rigforge init``).
+        if root is not None:
+            default_key = root / DEFAULT_SIGNING_KEY_PATH
+            if default_key.exists():
+                return default_key.read_bytes().strip()
         return None
 
     def resolve_mcp_token(self, root: Path | None = None) -> str | None:
@@ -166,6 +184,28 @@ def load_config(ctx: ProjectContext) -> RigForgeConfig:
         return RigForgeConfig(**raw)
     except Exception as exc:  # noqa: BLE001 — surface as ValueError
         raise ValueError(f"{path}: invalid rigforge.yaml: {exc}") from exc
+
+
+def ensure_signing_key(root: Path) -> tuple[Path, bool]:
+    """Ensure a per-project signing key exists at ``.rigforge/signing.key``.
+
+    Returns ``(path, created)`` where ``created`` is True only when a new key
+    was generated this call. The key is 32 random bytes, hex-encoded, written
+    with ``0o600`` permissions. Idempotent: an existing key is left untouched.
+    """
+    import os as _os
+    import secrets
+
+    key_path = root / DEFAULT_SIGNING_KEY_PATH
+    if key_path.exists():
+        return key_path, False
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.write_text(secrets.token_hex(32))
+    try:
+        _os.chmod(key_path, 0o600)
+    except OSError:  # pragma: no cover — best-effort on exotic filesystems
+        pass
+    return key_path, True
 
 
 def default_config_yaml(project_name: str) -> str:

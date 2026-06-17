@@ -345,18 +345,31 @@ class ArchonHarness:
     # ── Status ─────────────────────────────────────────────────────────
 
     def status(self) -> dict[int, dict]:
+        signing_key = (
+            self.config.resolve_signing_key(self.ctx.root)
+            if self.config.signing.enabled
+            else None
+        )
         out: dict[int, dict] = {}
         for p, name in PHASES.items():
             path = self.ctx.proof_file(p)
             if path.exists():
                 try:
                     packet = ProofPacket.load(path)
+                    signed = bool(packet.signature)
+                    # ``signature_ok`` is True/False only when we can actually
+                    # check it (signed packet + key available); otherwise None.
+                    signature_ok: bool | None = None
+                    if signed and signing_key is not None:
+                        signature_ok = packet.verify_signature(signing_key)
                     out[p] = {
                         "name": name,
                         "sealed": True,
                         "verifier": packet.verifier,
                         "sealed_at": packet.sealed_at.isoformat(),
                         "integrity_ok": packet.verify_integrity(),
+                        "signed": signed,
+                        "signature_ok": signature_ok,
                         "artifact_count": len(packet.artifacts),
                     }
                 except Exception as exc:  # noqa: BLE001

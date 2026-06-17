@@ -30,6 +30,9 @@ htmlcov/
 # Proof packets (generated at runtime)
 proofs/
 
+# RIGForge signing key (auto-generated, never commit)
+.rigforge/
+
 # Ruff
 .ruff_cache/node_modules/
 .next/

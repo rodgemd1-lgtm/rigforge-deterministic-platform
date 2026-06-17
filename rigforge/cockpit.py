@@ -28,6 +28,18 @@ def _shorten(text: str, *, width: int, placeholder: str = "…") -> str:
     return text[: max(0, width - len(placeholder))].rstrip(", ") + placeholder
 
 
+def _signature_tag(info: dict[str, Any]) -> str:
+    """Human-readable signing state for a sealed phase (G006)."""
+    if not info.get("signed"):
+        return "unsigned"
+    sig_ok = info.get("signature_ok")
+    if sig_ok is True:
+        return "🔏 signed ✓"
+    if sig_ok is False:
+        return "signed ⚠️ signature FAIL"
+    return "signed (no key to verify)"
+
+
 def _row(phase: int, info: dict[str, Any]) -> str:
     sealed = info.get("sealed", False)
     name = html.escape(str(info.get("name", "")))
@@ -36,9 +48,10 @@ def _row(phase: int, info: dict[str, Any]) -> str:
     if sealed and integrity is False:
         tag += " ⚠️ integrity FAIL"
     verifier = html.escape(str(info.get("verifier", "—")))
+    sig = html.escape(_signature_tag(info)) if sealed else "—"
     return (
         f"<tr><td>{phase}</td><td>{name}</td>"
-        f"<td>{tag}</td><td>{verifier}</td></tr>"
+        f"<td>{tag}</td><td>{sig}</td><td>{verifier}</td></tr>"
     )
 
 
@@ -80,7 +93,7 @@ def render_cockpit_html(ctx: ProjectContext) -> str:
         f"<h1>🛸 RIGForge Cockpit</h1>"
         f"<small>{html.escape(str(ctx.root))}</small>"
         "<h2>Phases</h2><table><thead><tr>"
-        "<th>#</th><th>Name</th><th>Status</th><th>Verifier</th>"
+        "<th>#</th><th>Name</th><th>Status</th><th>Signature</th><th>Verifier</th>"
         f"</tr></thead><tbody>{rows}</tbody></table>"
         "<h2>Recent ledger events</h2><table><thead><tr>"
         "<th>ts</th><th>kind</th><th>actor</th><th>fields</th>"

@@ -279,7 +279,9 @@ class TestMCPAuth:
             pytest.skip("httpx/fastapi.testclient not installed")
         from rigforge.mcp_server import create_mcp_server
 
-        app = create_mcp_server(auth_token=token)
+        # A tokenless server now refuses to start by default (G003); the
+        # original "no token means no auth" behaviour requires explicit opt-in.
+        app = create_mcp_server(auth_token=token, allow_insecure=token is None)
         return TestClient(app)
 
     def test_open_paths_do_not_require_auth(self):

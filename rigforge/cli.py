@@ -81,6 +81,23 @@ def _verifier_identity() -> str:
     )
 
 
+def _ensure_gitignore_entry(root: Path, entry: str) -> None:
+    """Append ``entry`` to the project's ``.gitignore`` if not already present.
+
+    Idempotent and best-effort — used to keep the auto-generated signing key
+    out of version control.
+    """
+    gitignore = root / ".gitignore"
+    existing = gitignore.read_text() if gitignore.exists() else ""
+    lines = {ln.strip() for ln in existing.splitlines()}
+    if entry.strip() in lines:
+        return
+    block = "" if existing.endswith("\n") or not existing else "\n"
+    block += f"\n# RIGForge signing key (auto-generated, never commit)\n{entry}\n"
+    with gitignore.open("a", encoding="utf-8") as fh:
+        fh.write(block)
+
+
 # ── Root group ──────────────────────────────────────────────────────────
 
 
@@ -117,6 +134,15 @@ def init(click_ctx: click.Context):
         from rigforge.config import default_config_yaml
         cfg.write_text(default_config_yaml(ctx.root.name))
         created.append(str(cfg.relative_to(ctx.root)))
+
+    # Auto-generate a per-project signing key so ProofPackets are tamper-evident
+    # by default (G006). Gitignored so the secret never gets committed.
+    from rigforge.config import ensure_signing_key
+
+    key_path, key_created = ensure_signing_key(ctx.root)
+    if key_created:
+        created.append(str(key_path.relative_to(ctx.root)))
+    _ensure_gitignore_entry(ctx.root, ".rigforge/")
 
     payload = {"root": str(ctx.root), "created": created, "ok": True}
     _emit(
@@ -761,9 +787,13 @@ def cockpit(click_ctx: click.Context, host: str | None, port: int | None, print_
 @click.option("--auth-token", default=None,
               help="Shared bearer token required for HTTP requests (G003). "
                    "Falls back to RIGFORGE_MCP_TOKEN / rigforge.yaml.")
+@click.option("--allow-insecure", is_flag=True, default=False,
+              help="Permit the HTTP transport to start with NO auth token (G003). "
+                   "Off by default; exposes the contract tools to any caller.")
 @click.pass_context
 def mcp_serve(click_ctx: click.Context, host: str | None, port: int | None,
-              services: str | None, transport: str | None, auth_token: str | None):
+              services: str | None, transport: str | None, auth_token: str | None,
+              allow_insecure: bool):
     """Boot MCP servers (Recall, Stitch, Archon, DeerFlow) over HTTP or stdio."""
     ctx = _ctx(click_ctx)
     from rigforge.config import load_config
@@ -791,11 +821,16 @@ def mcp_serve(click_ctx: click.Context, host: str | None, port: int | None,
     if token:
         click.echo("   Auth: bearer-token required (G003)")
     try:
-        from rigforge.mcp_server import create_mcp_server
+        from rigforge.mcp_server import create_mcp_server, MCPInsecureBindError
 
-        server = create_mcp_server(
-            host=bind_host, port=bind_port, services=service_list, auth_token=token,
-        )
+        try:
+            server = create_mcp_server(
+                host=bind_host, port=bind_port, services=service_list,
+                auth_token=token, allow_insecure=allow_insecure,
+            )
+        except MCPInsecureBindError as exc:
+            click.echo(f"❌ {exc}")
+            sys.exit(2)
         click.echo(f"   MCP server ready at http://{bind_host}:{bind_port}")
         click.echo("   Tools: gev.contract_create/validate/list, gev.phase_status, gev.proof_seal")
         click.echo("   Press Ctrl+C to stop.")

@@ -280,22 +280,54 @@ def serve_stdio(input_stream: IO[str] | None = None,
 
 # ── MCP server factory ─────────────────────────────────────────────────
 
-def create_mcp_server(host: str = "0.0.0.0", port: int = 8765,
+class MCPInsecureBindError(RuntimeError):
+    """Raised when an HTTP MCP server would bind without authentication (G003).
+
+    Refuse-by-default: an unauthenticated HTTP transport is an open RPC surface
+    onto the contract tools. The operator must either configure a token or
+    explicitly accept the risk via ``allow_insecure=True``.
+    """
+
+
+def create_mcp_server(host: str = "127.0.0.1", port: int = 8765,
                       services: list[str] | None = None,
-                      auth_token: str | None = None):
+                      auth_token: str | None = None,
+                      *, allow_insecure: bool = False):
     """Create a FastAPI MCP server with contract tools.
 
     This is the entry-point for ``rigforge mcp-serve --transport http``.
     When ``auth_token`` is non-empty, every request (except ``/health``
     and ``/``) must carry a matching ``Authorization`` bearer header (G003).
+
+    Security defaults (G003):
+
+    * ``host`` defaults to ``127.0.0.1`` — exposing the server on a routable
+      interface (e.g. ``0.0.0.0``) is opt-in, not the default.
+    * The HTTP transport **refuses to start** with no token configured unless
+      ``allow_insecure=True`` is passed explicitly. A one-line banner is
+      printed on bind showing host, port, and auth state.
     """
+    services = services or ["recall", "stitch", "archon", "deerflow"]
+    auth_token = (auth_token or "").strip() or None
+
+    # Refuse-by-default BEFORE importing/constructing the web framework so the
+    # security contract holds even where FastAPI is not installed.
+    if auth_token is None and not allow_insecure:
+        raise MCPInsecureBindError(
+            "Refusing to start the HTTP MCP transport with no auth token: this "
+            "would expose the contract tools to any caller. Configure a token "
+            "(mcp.token / RIGFORGE_MCP_TOKEN) or pass --allow-insecure to accept "
+            "the risk explicitly."
+        )
+
     try:
         from fastapi import FastAPI
     except ImportError:
         raise ImportError("MCP dependencies not installed. Run: pip install rigforge[mcp]")
 
-    services = services or ["recall", "stitch", "archon", "deerflow"]
-    auth_token = (auth_token or "").strip() or None
+    _auth_state = "token-required" if auth_token else "UNAUTHENTICATED (insecure)"
+    _exposed = " — EXPOSED on a routable interface" if host not in {"127.0.0.1", "localhost", "::1"} else ""
+    print(f"[rigforge-mcp] binding http://{host}:{port}  auth={_auth_state}{_exposed}")
 
     app = FastAPI(
         title="RIGForge MCP Server",

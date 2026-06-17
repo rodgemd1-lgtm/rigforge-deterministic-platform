@@ -21,6 +21,27 @@ HARD_BLOCK = "hard_block"
 SOFT_BLOCK = "soft_block"
 ADVISORY = "advisory"
 
+# Fallback wall-clock ceiling (seconds) for any gate that shells out, used when
+# no project config supplies ``budgets.max_runtime_minutes``. A runaway test
+# runner or linter must surface as a RED gate, never a hung seal.
+DEFAULT_GATE_TIMEOUT_SECONDS = 300
+
+
+def _gate_timeout_seconds(ctx: ProjectContext) -> int:
+    """Resolve the subprocess timeout for a shelling-out gate.
+
+    Sourced from ``budgets.max_runtime_minutes`` in ``rigforge.yaml`` when the
+    config is loadable; otherwise the conservative default. Never raises — a
+    broken config falls back to the default so the gate still runs.
+    """
+    try:
+        from rigforge.config import load_config
+
+        cfg = load_config(ctx)
+        return max(1, int(cfg.budgets.max_runtime_minutes) * 60)
+    except Exception:  # noqa: BLE001 — config errors must not disarm the timeout
+        return DEFAULT_GATE_TIMEOUT_SECONDS
+
 
 @dataclass
 class GateResult:
@@ -85,16 +106,32 @@ def gate_contracts_present(ctx: ProjectContext) -> GateResult:
 
 
 def gate_pytest(ctx: ProjectContext, *, quiet: bool = True) -> GateResult:
-    """Run pytest from the project root. Returns soft-block on failure."""
+    """Run pytest from the project root.
+
+    A missing test runner is a HARD_BLOCK: you cannot prove a phase is done
+    when the suite that would catch failure never ran. A runaway suite is
+    bounded by the configured runtime budget and surfaces as RED on timeout.
+    """
     if shutil.which("pytest") is None:
         return GateResult(
             name="pytest",
             passed=False,
-            severity=SOFT_BLOCK,
-            detail="pytest not installed",
+            severity=HARD_BLOCK,
+            detail="pytest not installed (cannot verify a seal without a test runner)",
         )
+    timeout = _gate_timeout_seconds(ctx)
     args = ["pytest", "-q"] if quiet else ["pytest"]
-    proc = subprocess.run(args, cwd=str(ctx.root), capture_output=True, text=True)
+    try:
+        proc = subprocess.run(
+            args, cwd=str(ctx.root), capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        return GateResult(
+            name="pytest",
+            passed=False,
+            severity=HARD_BLOCK,
+            detail=f"pytest timed out after {timeout}s",
+        )
     tail = "\n".join(proc.stdout.strip().splitlines()[-3:]) or proc.stderr.strip()[-300:]
     return GateResult(
         name="pytest",
@@ -105,6 +142,8 @@ def gate_pytest(ctx: ProjectContext, *, quiet: bool = True) -> GateResult:
 
 
 def gate_ruff(ctx: ProjectContext) -> GateResult:
+    # ruff is a linter, not a verifier: its severity is ADVISORY, so an absent
+    # ruff never waves a seal through — it cannot block one in the first place.
     if shutil.which("ruff") is None:
         return GateResult(
             name="ruff",
@@ -112,12 +151,22 @@ def gate_ruff(ctx: ProjectContext) -> GateResult:
             severity=ADVISORY,
             detail="ruff not installed (advisory)",
         )
-    proc = subprocess.run(
-        ["ruff", "check", "rigforge", "contracts"],
-        cwd=str(ctx.root),
-        capture_output=True,
-        text=True,
-    )
+    timeout = _gate_timeout_seconds(ctx)
+    try:
+        proc = subprocess.run(
+            ["ruff", "check", "rigforge", "contracts"],
+            cwd=str(ctx.root),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return GateResult(
+            name="ruff",
+            passed=False,
+            severity=ADVISORY,
+            detail=f"ruff timed out after {timeout}s",
+        )
     return GateResult(
         name="ruff",
         passed=proc.returncode == 0,
