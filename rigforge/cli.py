@@ -435,6 +435,33 @@ def verify(click_ctx: click.Context, strict: bool, require_signature: bool):
         sys.exit(1)
 
 
+# ── demo (live tamper-detection wedge) ───────────────────────────────────
+
+
+@main.command("demo")
+@click.pass_context
+def demo(click_ctx: click.Context):
+    """Run the live tamper-detection demo: seal, tamper, and catch the forgery.
+
+    Runs the REAL proof machinery end-to-end in a temp dir with an ephemeral
+    signing key: an agent claims success, RIGForge seals a signed ProofPacket,
+    the artifact is tampered and the integrity hash re-forged to hide it, then
+    ``verify`` catches the forgery via the HMAC signature check. Self-contained,
+    no external deps, leaves no state behind.
+    """
+    from rigforge.demo import render_demo, run_demo
+
+    result = run_demo()
+    if _is_json(click_ctx):
+        click.echo(json.dumps(result.to_dict(), indent=2))
+    else:
+        render_demo(result)
+    # The whole point of the demo is that the forgery is caught. If the
+    # cryptographic invariant ever breaks, fail loudly rather than lie.
+    if not result.forgery_caught:
+        sys.exit(1)
+
+
 # ── contract group ──────────────────────────────────────────────────────
 
 
