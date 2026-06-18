@@ -45,3 +45,6 @@ ledger/
 proofs/
 *.output
 .coverage
+
+# internal launch playbook (not public)
+docs/LAUNCH.md
