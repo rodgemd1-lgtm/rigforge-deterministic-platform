@@ -59,6 +59,34 @@ class TestInit:
         assert "rigforge.yaml" in payload["created"]
 
 
+# ── verdicts (swarm board) ──────────────────────────────────────────────
+
+
+class TestVerdicts:
+    def _seed(self, project: Path):
+        from rigforge.ledger import ExecutionLedger
+
+        led = ExecutionLedger(project / "ledger" / "execution.jsonl")
+        for _ in range(3):
+            led.append(kind="verify", actor="good-agent", accepted=True)
+        led.append(kind="verify", actor="rogue-bot", accepted=False)
+
+    def test_verdicts_json(self, runner, project):
+        self._seed(project)
+        result = _invoke(runner, project, "--json", "verdicts")
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["verdicts"]["good-agent"]["accepted"] == 3
+        assert payload["verdicts"]["rogue-bot"]["rejected"] == 1
+
+    def test_verdicts_text_lists_agents(self, runner, project):
+        self._seed(project)
+        result = _invoke(runner, project, "verdicts")
+        assert result.exit_code == 0, result.output
+        assert "good-agent" in result.output
+        assert "rogue-bot" in result.output
+
+
 # ── doctor ──────────────────────────────────────────────────────────────
 
 

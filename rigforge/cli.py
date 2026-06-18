@@ -824,6 +824,49 @@ def archon_status(click_ctx: click.Context):
     _emit(click_ctx, render, payload)
 
 
+@main.command("verdicts")
+@click.option("--group-by", "group_by", default="actor",
+              help="Field to group rows by (default: actor — i.e. the agent identity).")
+@click.pass_context
+def verdicts(click_ctx: click.Context, group_by: str):
+    """Swarm verdict board: per-agent accept/reject tally over the ledger.
+
+    One row per agent: how many of its sealed/verified claims RIGForge ACCEPTED
+    vs REJECTED, and its trust rate. When you run a fleet of agents, this is the
+    answer to "which of them can I trust?" — provably, from real verdicts.
+    """
+    ctx = _ctx(click_ctx)
+    data = ExecutionLedger(ctx.ledger_file).verdicts(group_by=group_by)
+    payload = {"group_by": group_by, "verdicts": data}
+
+    def render():
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        if not data:
+            console.print(
+                "No verdicts yet — run agents through `rigforge seal` / `verify` first."
+            )
+            return
+        tbl = Table(title=f"RIGForge · swarm verdict board (by {group_by})")
+        tbl.add_column(group_by, style="bold")
+        tbl.add_column("accepted", justify="right", style="green")
+        tbl.add_column("rejected", justify="right", style="red")
+        tbl.add_column("trust", justify="right")
+        tbl.add_column("last", style="dim")
+        for name in sorted(data):
+            g = data[name]
+            total = g["accepted"] + g["rejected"]
+            trust = f"{(g['accepted'] / total * 100):.0f}%" if total else "—"
+            tbl.add_row(
+                name, str(g["accepted"]), str(g["rejected"]), trust, str(g.get("last_kind") or "")
+            )
+        console.print(tbl)
+
+    _emit(click_ctx, render, payload)
+
+
 # ── review / questions / gaps ───────────────────────────────────────────
 
 
