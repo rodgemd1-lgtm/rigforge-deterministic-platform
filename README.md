@@ -157,6 +157,33 @@ the agent can't forge its own verdict:
 // → { "accepted": true, "integrity_ok": true, "signature_ok": true, ... }
 ```
 
+## Spec-bound proofs — "did the build match the spec?"
+
+Integrity proves the artifact is unchanged. **Spec-bound proofs go further: they prove the build
+satisfied the acceptance criteria of the exact spec the agent was given.** Bind a spec when you
+seal — a [spec-kit](https://github.com/github/spec-kit)-style markdown checklist or a YAML
+`criteria:` list — and:
+
+- the criteria are **signed into** the packet — a dropped or edited criterion breaks the signature;
+- verification **rejects** unless every criterion has a passing gate — *even if the artifact is intact*;
+- a swapped spec is caught by hash mismatch.
+
+```bash
+rigforge seal 1 --artifact build.out --spec spec.md
+rigforge spec-check --proof proofs/phase1_proof.json --spec spec.md
+#  ✅ spec-check: PASS   met: login works, tests pass, lint clean
+```
+
+Skip a requirement and the verdict flips — provably, not on a vibe:
+
+```
+❌ spec-check: FAIL
+   MISSING: lint clean
+```
+
+Observability shows what happened; eval scores quality; orchestration runs the fleet. Proving
+*build-matches-spec* is the part nobody else does.
+
 ## Honest scope
 
 RIGForge proves **integrity and provenance** — that an artifact is what the agent claims
@@ -194,8 +221,9 @@ rigforge init                    # scaffold a project
 rigforge doctor                  # diagnose env, layout, contracts, CI, lint readiness
 rigforge status                  # phase status        (--json for machine-readable)
 rigforge run N [--dry-run]       # run phase N's deterministic gate bundle
-rigforge seal N --artifact PATH  # seal a phase with a ProofPacket
+rigforge seal N --artifact PATH [--spec FILE]      # seal a phase (optionally spec-bound)
 rigforge verify [--strict] [--require-signature]   # re-check sealed phases
+rigforge spec-check --proof P --spec S             # prove a build matched its spec
 rigforge resume                  # resume the most recent failed/unfinished phase
 rigforge benchmark               # the honesty benchmark (false-done-caught rate)
 rigforge demo                    # live tamper-detection demo

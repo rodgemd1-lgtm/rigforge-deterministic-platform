@@ -52,6 +52,34 @@ class TestSealAndVerify:
         assert "error" not in resp
         assert "result" in resp
 
+    def test_spec_bound_accept_when_criteria_met(self, tmp_path, monkeypatch):
+        self._isolate(tmp_path, monkeypatch)
+        (tmp_path / "spec.md").write_text("## AC\n- [ ] tests pass\n- [ ] lint clean\n")
+        v = seal_and_verify(
+            "good",
+            "feat",
+            artifacts=["build.bin"],
+            gates=[{"name": "tests pass", "passed": True}, {"name": "lint clean", "passed": True}],
+            spec="spec.md",
+        )
+        assert v["accepted"] is True
+        assert v["spec"]["ok"] is True
+
+    def test_spec_bound_reject_when_criterion_skipped(self, tmp_path, monkeypatch):
+        self._isolate(tmp_path, monkeypatch)
+        (tmp_path / "spec.md").write_text("## AC\n- [ ] tests pass\n- [ ] lint clean\n")
+        # The artifact is intact, but the agent skipped 'lint clean' → REJECTED.
+        v = seal_and_verify(
+            "lazy",
+            "feat",
+            artifacts=["build.bin"],
+            gates=[{"name": "tests pass", "passed": True}],
+            spec="spec.md",
+        )
+        assert v["integrity_ok"] is True  # the file is fine...
+        assert v["accepted"] is False  # ...but the spec was not satisfied
+        assert "lint clean" in v["spec"]["missing"]
+
 
 class TestContractCreate:
     def test_create_basic(self):

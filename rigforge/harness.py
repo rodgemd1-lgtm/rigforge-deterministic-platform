@@ -29,6 +29,7 @@ from rigforge.gates import (
     gates_for_phase,
 )
 from rigforge.ledger import ExecutionLedger
+from rigforge.spec import SpecBinding
 from rigforge.proof import ArtifactRecord, GateOutcome, ProofPacket
 from rigforge.run_envelope import RunEnvelope
 
@@ -381,6 +382,7 @@ class ArchonHarness:
         gates: list[GateResult] | None = None,
         envelope: RunEnvelope | None = None,
         eval_loop: EvalLoopTranscript | None = None,
+        spec: "SpecBinding | None" = None,
     ) -> ProofPacket:
         artifact_records = [
             ArtifactRecord.from_path(Path(a), base=self.ctx.root) for a in (artifacts or [])
@@ -402,6 +404,7 @@ class ArchonHarness:
             gates=gate_records,
             run_envelope=envelope,
             eval_loop=loop_payload,
+            spec=spec,
         )
         path = self.ctx.proof_file(phase)
         signing_key = (

@@ -87,6 +87,43 @@ class TestVerdicts:
         assert "rogue-bot" in result.output
 
 
+# ── spec-check (spec-bound proofs, Move #2) ──────────────────────────────
+
+
+class TestSpecCheck:
+    def _write_proof(self, project: Path, *, lint_gate: bool):
+        import secrets
+
+        from rigforge.proof import GateOutcome, ProofPacket
+        from rigforge.spec import Spec, SpecBinding
+
+        spec_f = project / "spec.md"
+        spec_f.write_text("## AC\n- [ ] tests pass\n- [ ] lint clean\n")
+        key = secrets.token_bytes(32)
+        gates = [GateOutcome(name="tests pass", passed=True)]
+        if lint_gate:
+            gates.append(GateOutcome(name="lint clean", passed=True))
+        packet = ProofPacket(
+            phase=1, name="a", verifier="v", evidence="e", gates=gates,
+            spec=SpecBinding.of(Spec.from_file(spec_f)),
+        ).sealed(signing_key=key)
+        proof_f = project / "proof.json"
+        packet.write(proof_f, signing_key=key)
+        return proof_f, spec_f
+
+    def test_spec_check_pass(self, runner, tmp_path):
+        proof, spec = self._write_proof(tmp_path, lint_gate=True)
+        r = _invoke(runner, tmp_path, "spec-check", "--proof", str(proof), "--spec", str(spec))
+        assert r.exit_code == 0, r.output
+        assert "PASS" in r.output
+
+    def test_spec_check_fails_on_skipped_criterion(self, runner, tmp_path):
+        proof, spec = self._write_proof(tmp_path, lint_gate=False)
+        r = _invoke(runner, tmp_path, "spec-check", "--proof", str(proof), "--spec", str(spec))
+        assert r.exit_code == 1
+        assert "MISSING" in r.output and "lint clean" in r.output
+
+
 # ── doctor ──────────────────────────────────────────────────────────────
 
 

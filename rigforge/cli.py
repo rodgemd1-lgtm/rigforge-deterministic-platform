@@ -363,13 +363,21 @@ def trace(click_ctx: click.Context, phase: int, dry_run: bool):
               help="Seal even if blocking gates fail (records the failures in the packet).")
 @click.option("--eval-loop", "eval_loop", is_flag=True, default=False,
               help="Run gates through the evaluator-optimizer loop and seal the transcript.")
+@click.option("--spec", "spec_path", default=None, type=click.Path(exists=True),
+              help="Bind a spec file: the proof carries (signed) its acceptance criteria, "
+                   "checkable later with `rigforge spec-check`.")
 @click.pass_context
 def seal(click_ctx: click.Context, phase: int, artifacts: tuple[Path, ...],
-         evidence: str | None, verifier: str | None, force: bool, eval_loop: bool):
+         evidence: str | None, verifier: str | None, force: bool, eval_loop: bool,
+         spec_path: str | None):
     """Seal phase N: writes a ProofPacket with checksums + run envelope."""
     ctx = _ctx(click_ctx)
     harness = ArchonHarness(ctx)
     actor = verifier or _verifier_identity()
+    spec_binding = None
+    if spec_path:
+        from rigforge.spec import Spec, SpecBinding
+        spec_binding = SpecBinding.of(Spec.from_file(Path(spec_path)))
 
     run_result = harness.run(phase, dry_run=False, verifier=actor, eval_loop=eval_loop)
     if run_result.blockers and not force:
@@ -397,6 +405,7 @@ def seal(click_ctx: click.Context, phase: int, artifacts: tuple[Path, ...],
         gates=run_result.gates,
         envelope=run_result.envelope,
         eval_loop=run_result.eval_loop if run_result.eval_loop.enabled else None,
+        spec=spec_binding,
     )
     # When tracing is on, emit the gate spans and a root span carrying the
     # sealed packet hash (the integrity anchor users search for in Jaeger/Phoenix).
@@ -865,6 +874,42 @@ def verdicts(click_ctx: click.Context, group_by: str):
         console.print(tbl)
 
     _emit(click_ctx, render, payload)
+
+
+@main.command("spec-check")
+@click.option("--proof", "proof_path", required=True, type=click.Path(exists=True),
+              help="Path to a sealed ProofPacket JSON.")
+@click.option("--spec", "spec_path", required=True, type=click.Path(exists=True),
+              help="Path to the spec the work should satisfy.")
+@click.pass_context
+def spec_check(click_ctx: click.Context, proof_path: str, spec_path: str):
+    """Spec-bound verify: does a sealed proof actually satisfy a spec?
+
+    The differentiator over plain integrity: proves the build *matched the spec*
+    it was given — every acceptance criterion has a passing gate AND the proof
+    was sealed against THIS spec (hash match) — not merely that the artifact is
+    unchanged. A dropped criterion or a swapped spec fails here.
+    """
+    from rigforge.proof import ProofPacket
+    from rigforge.spec import verify_spec
+
+    packet = ProofPacket.load(Path(proof_path))
+    result = verify_spec(packet, spec_file=Path(spec_path))
+    overall = result.ok and result.spec_hash_ok is not False
+    payload = {**result.model_dump(), "pass": overall}
+
+    def render():
+        click.echo(f"{'✅' if overall else '❌'} spec-check: {'PASS' if overall else 'FAIL'}")
+        if result.spec_hash_ok is False:
+            click.echo("   ⚠️  spec MISMATCH — this proof was sealed against a different spec.")
+        if result.matched:
+            click.echo("   met:     " + ", ".join(result.matched))
+        if result.missing:
+            click.echo("   MISSING: " + ", ".join(result.missing))
+
+    _emit(click_ctx, render, payload)
+    if not overall:
+        raise SystemExit(1)
 
 
 # ── review / questions / gaps ───────────────────────────────────────────

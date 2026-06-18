@@ -145,6 +145,7 @@ def seal_and_verify(
     artifacts: list[str] | None = None,
     gates: list[dict[str, Any]] | None = None,
     phase: int = 1,
+    spec: str | None = None,
 ) -> dict[str, Any]:
     """Seal an agent's claimed work into a signed ProofPacket, verify it, and
     record the accept/reject verdict to the ledger under the agent's identity.
@@ -154,6 +155,11 @@ def seal_and_verify(
     artifacts (server-side key — the agent never holds it), runs its own
     integrity + signature verification, and appends the verdict to the swarm
     verdict board (`rigforge verdicts`). Returns the verdict only.
+
+    When ``spec`` (a path to a spec file) is given, the proof is **spec-bound**
+    (Move #2): the spec's acceptance criteria are bound into the signed packet
+    and the verdict is REJECTED unless every criterion has a passing gate — so
+    an agent that skips a requirement is caught even when the artifact is intact.
     """
     from rigforge.ledger import ExecutionLedger
     from rigforge.proof import ArtifactRecord, GateOutcome, ProofPacket
@@ -169,6 +175,12 @@ def seal_and_verify(
         )
         for g in (gates or [{"name": "build", "passed": True}])
     ]
+    spec_binding = None
+    if spec:
+        from rigforge.spec import Spec, SpecBinding
+
+        spec_binding = SpecBinding.of(Spec.from_file(spec))
+
     packet = ProofPacket(
         phase=phase,
         name=name,
@@ -176,11 +188,22 @@ def seal_and_verify(
         evidence=f"{agent} reported completion of {name!r}.",
         artifacts=records,
         gates=gate_outcomes,
+        spec=spec_binding,
     ).sealed(signing_key=key)
 
     integrity_ok = packet.verify_integrity()
     signature_ok = packet.verify_signature(key)
-    accepted = bool(integrity_ok and signature_ok)
+
+    spec_result: dict[str, Any] | None = None
+    if spec_binding is not None:
+        from rigforge.spec import verify_spec
+
+        sm = verify_spec(packet)
+        spec_result = {"ok": sm.ok, "missing": sm.missing}
+
+    accepted = bool(
+        integrity_ok and signature_ok and (spec_result["ok"] if spec_result else True)
+    )
 
     ExecutionLedger(root / "ledger" / "execution.jsonl").append(
         kind="verify",
@@ -188,6 +211,7 @@ def seal_and_verify(
         accepted=accepted,
         name=name,
         packet_sha256=packet.packet_sha256,
+        spec_ok=(spec_result["ok"] if spec_result else None),
     )
     return {
         "agent": agent,
@@ -195,6 +219,7 @@ def seal_and_verify(
         "accepted": accepted,
         "integrity_ok": integrity_ok,
         "signature_ok": signature_ok,
+        "spec": spec_result,
         "packet_sha256": packet.packet_sha256,
     }
 
@@ -207,8 +232,8 @@ TOOL_DISPATCH: dict[str, Callable[..., Any]] = {
     "gev.contract_list": lambda: contract_list(),
     "gev.phase_status": lambda phase=None: phase_status(phase),
     "gev.proof_seal": lambda phase, artifacts=None: proof_seal(phase, artifacts),
-    "gev.seal_and_verify": lambda agent, name, artifacts=None, gates=None, phase=1: seal_and_verify(
-        agent, name, artifacts, gates, phase
+    "gev.seal_and_verify": lambda agent, name, artifacts=None, gates=None, phase=1, spec=None: (
+        seal_and_verify(agent, name, artifacts, gates, phase, spec)
     ),
 }
 
@@ -283,6 +308,11 @@ def list_tools() -> list[dict[str, Any]]:
                     "artifacts": {"type": "array", "items": {"type": "string"}},
                     "gates": {"type": "array", "items": {"type": "object"}},
                     "phase": {"type": "integer", "minimum": 1, "maximum": 7, "default": 1},
+                    "spec": {
+                        "type": "string",
+                        "description": "Path to a spec file; binds it and rejects unless every "
+                        "acceptance criterion has a passing gate (spec-bound proof).",
+                    },
                 },
                 "required": ["agent", "name"],
             },

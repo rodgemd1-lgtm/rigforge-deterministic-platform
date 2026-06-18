@@ -26,6 +26,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from rigforge.run_envelope import RunEnvelope
+from rigforge.spec import SpecBinding
 
 
 PROOF_SCHEMA_VERSION = "1.2.0"
@@ -131,6 +132,10 @@ class ProofPacket(BaseModel):
     )
     artifacts: list[ArtifactRecord] = Field(default_factory=list)
     gates: list[GateOutcome] = Field(default_factory=list)
+    # Spec-bound proof (Move #2): the acceptance spec this work was sealed
+    # against. Bound into the signed hash, so the spec cannot be swapped or its
+    # criteria edited after sealing. None for specless proofs (back-compatible).
+    spec: SpecBinding | None = None
     run_envelope: RunEnvelope | None = None
     # Evaluator-Optimizer loop transcript (research #2). None when the loop
     # was opt-out (or for packets sealed before the loop existed) so older
