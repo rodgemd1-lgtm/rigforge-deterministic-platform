@@ -83,6 +83,9 @@ rigforge seal 1 --artifact docs/PHASE1.md --evidence "bootstrap complete"
 rigforge verify --require-signature
 ```
 
+Wiring it into your own agent? [`examples/verify_agent_done.py`](examples/verify_agent_done.py)
+is the smallest real integration — seal a claim, tamper it, watch the signature catch the lie.
+
 ## Prove it yourself — the honesty benchmark
 
 Don't take the README's word for it either. RIGForge ships a seeded, offline, reproducible
@@ -127,6 +130,14 @@ free core never requires it:
 pip install -e ".[telemetry]"
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 rigforge trace 1
 ```
+
+## Honest scope
+
+RIGForge proves **integrity and provenance** — that an artifact is what the agent claims
+and that nothing changed it since sealing. It does **not** make your code correct or safe,
+force an agent to seal, or survive a stolen signing key. Those boundaries are stated plainly,
+not buried — full trust model and what it deliberately doesn't defend against:
+**[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)**.
 
 ## How it works
 
