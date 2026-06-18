@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rigforge.context import ProjectContext
+from rigforge.evalloop import (
+    EvaluatorLoop,
+    EvalLoopTranscript,
+    disabled_transcript,
+)
 
 if TYPE_CHECKING:  # pragma: no cover — typing-only import to avoid a cycle
     from rigforge.registry import CapabilityRegistry
@@ -55,6 +60,11 @@ class HarnessResult:
     cost_usd: float = 0.0
     tokens: int = 0
     budget_exceeded: bool = False
+    # Evaluator-Optimizer loop transcript (research #2). Always present —
+    # ``disabled_transcript()`` when the loop is opt-out — so seal/serialize
+    # code never needs a None-check. Carries the full per-gate attempt
+    # history that gets sealed into the ProofPacket.
+    eval_loop: EvalLoopTranscript = field(default_factory=disabled_transcript)
 
     def to_dict(self) -> dict:
         return {
@@ -62,10 +72,11 @@ class HarnessResult:
             "ok": self.ok,
             "envelope": self.envelope.to_dict(),
             "gates": [g.to_dict() for g in self.gates],
-            "blockers": [g.to_dict() for g in self.blockers],
+            "blockers": [b.to_dict() for b in self.blockers],
             "cost_usd": self.cost_usd,
             "tokens": self.tokens,
             "budget_exceeded": self.budget_exceeded,
+            "eval_loop": self.eval_loop.to_dict(),
         }
 
 
@@ -215,7 +226,34 @@ class ArchonHarness:
                 results[idx] = fut.result()
         return [r for r in results if r is not None]
 
-    def run(self, phase: int, *, dry_run: bool = False, verifier: str | None = None) -> HarnessResult:
+    def _run_gates_with_eval_loop(self, phase: int) -> tuple[list[GateResult], EvalLoopTranscript]:
+        """Run the per-phase gate bundle through the evaluator-optimizer loop.
+
+        The loop wraps each gate thunk in a score → retry → escalate cycle
+        (research #2). We reuse ``_run_gates``'s thunk gathering so the
+        eval loop sees exactly the same gates (built-ins + registered
+        capabilities). The loop is run sequentially — its retry semantics
+        are per-gate, so parallel scheduling would interleave attempts and
+        muddle the transcript. Determinism is preserved by the in-order
+        transcript records.
+        """
+        from rigforge.gates import gate_thunks_for_phase
+
+        thunks = list(gate_thunks_for_phase(self.ctx, phase))
+        thunks += self.registry.thunks_for_phase(self.ctx, phase)
+        loop = EvaluatorLoop(max_retries=self.config.eval_loop.max_retries)
+        transcript = loop.run_all(thunks)
+        gates = EvaluatorLoop.final_results(transcript)
+        return gates, transcript
+
+    def run(
+        self,
+        phase: int,
+        *,
+        dry_run: bool = False,
+        verifier: str | None = None,
+        eval_loop: bool | None = None,
+    ) -> HarnessResult:
         envelope = RunEnvelope(phase=phase, dry_run=dry_run, verifier=verifier)
         self.ledger.append(
             kind="run.start",
@@ -224,6 +262,11 @@ class ArchonHarness:
             phase=phase,
             dry_run=dry_run,
         )
+
+        # Resolve whether the evaluator-optimizer loop is active. Explicit
+        # argument wins; otherwise the config knob (``eval_loop.enabled``)
+        # decides; default is off (opt-in) so existing behavior is unchanged.
+        loop_active = bool(eval_loop) if eval_loop is not None else self.config.eval_loop.enabled
 
         if dry_run:
             envelope = envelope.finish()
@@ -238,7 +281,12 @@ class ArchonHarness:
             )
             return result
 
-        gates = self._run_gates(phase)
+        if loop_active:
+            gates, transcript = self._run_gates_with_eval_loop(phase)
+        else:
+            gates = self._run_gates(phase)
+            transcript = disabled_transcript()
+
         blockers = all_blocking_failed(gates)
         envelope = envelope.finish()
         result = HarnessResult(
@@ -249,6 +297,7 @@ class ArchonHarness:
             ok=not blockers,
             cost_usd=self.budget.cost_usd,
             tokens=self.budget.tokens,
+            eval_loop=transcript,
         )
         self.ledger.append(
             kind="run.finish",
@@ -259,6 +308,8 @@ class ArchonHarness:
             blocker_count=len(blockers),
             cost_usd=self.budget.cost_usd,
             tokens=self.budget.tokens,
+            eval_loop_enabled=loop_active,
+            eval_loop_escalated=transcript.escalated,
         )
         return result
 
@@ -329,6 +380,7 @@ class ArchonHarness:
         artifacts: list[Path] | None = None,
         gates: list[GateResult] | None = None,
         envelope: RunEnvelope | None = None,
+        eval_loop: EvalLoopTranscript | None = None,
     ) -> ProofPacket:
         artifact_records = [
             ArtifactRecord.from_path(Path(a), base=self.ctx.root) for a in (artifacts or [])
@@ -337,6 +389,10 @@ class ArchonHarness:
             GateOutcome(name=g.name, passed=g.passed, severity=g.severity, detail=g.detail)
             for g in (gates or [])
         ]
+        # Seal the FULL eval-loop transcript (every attempt score + the
+        # final outcome) into the packet when the loop ran. None keeps
+        # older seal call-sites and pre-loop packets unchanged.
+        loop_payload = eval_loop.to_dict() if eval_loop is not None else None
         packet = ProofPacket(
             phase=phase,
             name=PHASES.get(phase, "unknown"),
@@ -345,6 +401,7 @@ class ArchonHarness:
             artifacts=artifact_records,
             gates=gate_records,
             run_envelope=envelope,
+            eval_loop=loop_payload,
         )
         path = self.ctx.proof_file(phase)
         signing_key = (

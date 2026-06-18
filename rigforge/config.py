@@ -98,6 +98,19 @@ class CockpitConfig(BaseModel):
     port: int = Field(default=8770, ge=1, le=65535)
 
 
+class EvalLoopConfig(BaseModel):
+    """Evaluator-Optimizer loop config (research priority #2).
+
+    Opt-in: ``enabled`` defaults to False so existing runs are unchanged.
+    When enabled via config or the ``--eval-loop`` CLI flag, each gate runs
+    through a score → retry → escalate cycle before its result is sealed.
+    ``max_retries`` bounds the loop (no infinite spin).
+    """
+
+    enabled: bool = False
+    max_retries: int = Field(default=3, ge=1, le=10)
+
+
 class RigForgeConfig(BaseModel):
     """Typed view of ``rigforge.yaml``."""
 
@@ -109,6 +122,7 @@ class RigForgeConfig(BaseModel):
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     signing: SigningConfig = Field(default_factory=SigningConfig)
     cockpit: CockpitConfig = Field(default_factory=CockpitConfig)
+    eval_loop: EvalLoopConfig = Field(default_factory=EvalLoopConfig)
 
     # ── Resolved helpers (apply env-var overrides) ─────────────────────
 

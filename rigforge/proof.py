@@ -132,6 +132,11 @@ class ProofPacket(BaseModel):
     artifacts: list[ArtifactRecord] = Field(default_factory=list)
     gates: list[GateOutcome] = Field(default_factory=list)
     run_envelope: RunEnvelope | None = None
+    # Evaluator-Optimizer loop transcript (research #2). None when the loop
+    # was opt-out (or for packets sealed before the loop existed) so older
+    # proofs still load. When present, carries the full per-gate attempt
+    # history sealed into the packet.
+    eval_loop: dict | None = Field(default=None)
     packet_sha256: str = ""
     signature: str = Field(
         default="",

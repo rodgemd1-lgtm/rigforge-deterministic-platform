@@ -10,6 +10,7 @@ Top-level commands::
     rigforge run PHASE [--dry-run] [--json]
     rigforge seal PHASE [--artifact PATH ...] [--evidence TEXT]
     rigforge verify [--strict] [--json]
+    rigforge benchmark [--seed N]              # OFFLINE honesty gate (real numbers)
     rigforge diff PROOF_A.json PROOF_B.json   # MODEL-DIFF two ProofPackets
     rigforge contract list|validate|create|inspect
     rigforge archon  plan|run|status
@@ -48,6 +49,14 @@ from rigforge.gates import (
 from rigforge.harness import ArchonHarness, PHASES
 from rigforge.ledger import ExecutionLedger
 from rigforge.proof import ProofPacket
+from rigforge.telemetry import (
+    annotate_packet,
+    emit_run_spans,
+    force_flush,
+    enable as enable_telemetry,
+    is_enabled as telemetry_is_enabled,
+    root_span,
+)
 from rigforge.questions import QUESTIONS, as_dicts as questions_as_dicts
 
 
@@ -107,13 +116,21 @@ def _ensure_gitignore_entry(root: Path, entry: str) -> None:
               help="Override project-root discovery; treat this dir as the starting point.")
 @click.option("--json", "json_mode", is_flag=True, default=False,
               help="Emit machine-readable JSON where supported.")
+@click.option("--trace", "trace", is_flag=True, default=False,
+              help="Emit OpenTelemetry spans for this run (no-op if the "
+                   "[telemetry] extra is not installed).")
 @click.version_option(rigforge.__version__, prog_name="rigforge")
 @click.pass_context
-def main(click_ctx: click.Context, cwd: Path | None, json_mode: bool):
+def main(click_ctx: click.Context, cwd: Path | None, json_mode: bool, trace: bool):
     """RIGForge — Deterministic 7-Phase Agentic Engineering Platform."""
     click_ctx.ensure_object(dict)
     click_ctx.obj["project"] = ProjectContext.discover(cwd)
     click_ctx.obj["json"] = json_mode
+    # Turn on OTel emission when --trace is passed (or RIGFORGE_TRACE is set).
+    # enable() is a graceful no-op when opentelemetry isn't importable.
+    if trace or os.environ.get("RIGFORGE_TRACE"):
+        enable_telemetry()
+    click_ctx.obj["trace"] = trace
 
 
 # ── init ────────────────────────────────────────────────────────────────
@@ -244,13 +261,19 @@ def status(click_ctx: click.Context):
 @click.argument("phase", type=click.IntRange(1, 7))
 @click.option("--dry-run", is_flag=True, default=False,
               help="Plan only; do not execute gates or mutate state.")
+@click.option("--eval-loop", "eval_loop", is_flag=True, default=False,
+              help="Wrap each gate in the evaluator-optimizer loop: score, retry<=3, then escalate.")
 @click.pass_context
-def run(click_ctx: click.Context, phase: int, dry_run: bool):
+def run(click_ctx: click.Context, phase: int, dry_run: bool, eval_loop: bool):
     """Run phase N (1-7): executes that phase's deterministic gate bundle."""
     ctx = _ctx(click_ctx)
     harness = ArchonHarness(ctx)
     verifier = _verifier_identity()
-    result = harness.run(phase, dry_run=dry_run, verifier=verifier)
+    result = harness.run(phase, dry_run=dry_run, verifier=verifier, eval_loop=eval_loop)
+    # Emit OTel spans (root = the run, one child per gate) when --trace is on.
+    # Graceful no-op when the [telemetry] extra is not installed.
+    if telemetry_is_enabled():
+        emit_run_spans(result)
     payload = result.to_dict()
 
     def render():
@@ -262,6 +285,17 @@ def run(click_ctx: click.Context, phase: int, dry_run: bool):
                 click.echo(f"    • {step.name}: {step.description}")
             click.echo("✅ Dry-run complete (no state changed).")
             return
+        if result.eval_loop.enabled:
+            click.echo(
+                f"  ⟳ eval-loop active (max_retries={result.eval_loop.max_retries}):"
+            )
+            for rec in result.eval_loop.records:
+                tag = {
+                    "passed_first_try": "passed",
+                    "converged": f"converged in {rec.attempts_used}",
+                    "escalated": f"escalated after {rec.attempts_used} → {rec.escalation}",
+                }.get(rec.outcome, rec.outcome)
+                click.echo(f"     • {rec.gate_name:24s} [{tag}]")
         for g in result.gates:
             icon = "✅" if g.passed else ("❌" if g.severity == HARD_BLOCK else "⚠️")
             click.echo(f"  {icon} {g.name:24s} [{g.severity:11s}] {g.detail}")
@@ -271,6 +305,47 @@ def run(click_ctx: click.Context, phase: int, dry_run: bool):
             click.echo(f"❌ Phase {phase} has {len(result.blockers)} blocking failure(s).")
 
     _emit(click_ctx, render, payload)
+    if not dry_run and not result.ok:
+        sys.exit(1)
+
+
+# ── trace ───────────────────────────────────────────────────────────────
+
+
+@main.command()
+@click.argument("phase", type=click.IntRange(1, 7))
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Plan only; do not execute gates or mutate state.")
+@click.pass_context
+def trace(click_ctx: click.Context, phase: int, dry_run: bool):
+    """Run phase N and emit OpenTelemetry spans for it.
+
+    This is the run-and-trace shorthand: it forces tracing on and runs the
+    phase's gate bundle, emitting a root span (the run) plus one child span
+    per gate. By default each span is printed as OTLP-JSON to stdout; set
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` to export to a collector / Langfuse /
+    Phoenix / Jaeger instead.
+
+    Gracefully reports (and exits 0) when the optional ``[telemetry]`` extra
+    is not installed — the free core never requires it.
+    """
+    ctx = _ctx(click_ctx)
+    active = enable_telemetry()
+    if not active:
+        click.echo(
+            "ℹ️  OpenTelemetry not installed. Install with:  pip install -e '.[telemetry]'\n"
+            "    The run still completes normally (free core needs no extra deps)."
+        )
+    harness = ArchonHarness(ctx)
+    verifier = _verifier_identity()
+    result = harness.run(phase, dry_run=dry_run, verifier=verifier)
+    emit_run_spans(result)
+    click.echo(
+        f"🔧 Traced Phase {phase}: {PHASES[phase]}"
+        + ("" if dry_run else f" ({len(result.gates)} gate span(s))")
+    )
+    # Force-flush spans so they land before the process exits.
+    force_flush()
     if not dry_run and not result.ok:
         sys.exit(1)
 
@@ -286,15 +361,17 @@ def run(click_ctx: click.Context, phase: int, dry_run: bool):
 @click.option("--verifier", default=None, help="Override verifier identity for the packet.")
 @click.option("--force", is_flag=True, default=False,
               help="Seal even if blocking gates fail (records the failures in the packet).")
+@click.option("--eval-loop", "eval_loop", is_flag=True, default=False,
+              help="Run gates through the evaluator-optimizer loop and seal the transcript.")
 @click.pass_context
 def seal(click_ctx: click.Context, phase: int, artifacts: tuple[Path, ...],
-         evidence: str | None, verifier: str | None, force: bool):
+         evidence: str | None, verifier: str | None, force: bool, eval_loop: bool):
     """Seal phase N: writes a ProofPacket with checksums + run envelope."""
     ctx = _ctx(click_ctx)
     harness = ArchonHarness(ctx)
     actor = verifier or _verifier_identity()
 
-    run_result = harness.run(phase, dry_run=False, verifier=actor)
+    run_result = harness.run(phase, dry_run=False, verifier=actor, eval_loop=eval_loop)
     if run_result.blockers and not force:
         payload = {
             "ok": False,
@@ -319,7 +396,14 @@ def seal(click_ctx: click.Context, phase: int, artifacts: tuple[Path, ...],
         artifacts=list(artifacts),
         gates=run_result.gates,
         envelope=run_result.envelope,
+        eval_loop=run_result.eval_loop if run_result.eval_loop.enabled else None,
     )
+    # When tracing is on, emit the gate spans and a root span carrying the
+    # sealed packet hash (the integrity anchor users search for in Jaeger/Phoenix).
+    if telemetry_is_enabled():
+        emit_run_spans(run_result)
+        with root_span(phase, run_result) as span:
+            annotate_packet(span, packet)
     proof_path = ctx.proof_file(phase)
     payload = {
         "ok": True,
@@ -493,6 +577,50 @@ def diff(click_ctx: click.Context, proof_a: Path, proof_b: Path):
         lambda: render_diff(result, label_a=str(proof_a), label_b=str(proof_b)),
         payload,
     )
+
+
+# ── benchmark (the honesty gate) ────────────────────────────────────────
+
+
+@main.command("benchmark")
+@click.option("--seed", type=int, default=None,
+              help="Integer seed for the deterministic scenario suite "
+                   "(default: 0xC0FFEE = 12648430). Re-runs with the same seed "
+                   "reproduce identical artifacts, forgeries, and counts.")
+@click.pass_context
+def benchmark(click_ctx: click.Context, seed: int | None):
+    """Run the OFFLINE honesty-gate benchmark: real tamper-detection numbers.
+
+    Runs a fixed, seeded suite of deterministic build-task scenarios. For each,
+    an agent "claims done" — some honest, some forged (tampered artifact,
+    forged signature, swapped artifact, unsigned tamper, dropped gate).
+    RIGForge runs its REAL ``ProofPacket.verify_integrity`` /
+    ``verify_signature`` over each claim and we count what actually happened:
+    false-done-caught rate, false-pass rate (wrongly blocked honest claims),
+    tamper-detection precision, accuracy, plus per-scenario verdicts.
+
+    Fully offline: no network, no LLM, no flakiness. Re-running with the same
+    seed reproduces identical numbers. If a metric could not be honestly
+    measured offline it is OMITTED, never faked.
+    """
+    from rigforge.benchmark import DEFAULT_SEED, render_benchmark, run_benchmark
+
+    chosen_seed = DEFAULT_SEED if seed is None else seed
+    result = run_benchmark(seed=chosen_seed)
+    payload = result.to_dict()
+    payload["seed"] = chosen_seed
+    if _is_json(click_ctx):
+        click.echo(json.dumps(payload, indent=2))
+    else:
+        render_benchmark(result)
+    # If the platform ever fails to catch a forgery (false negative), fail
+    # loudly rather than report a green number that is a lie.
+    if result.false_negatives > 0:
+        click.echo(
+            f"❌ Benchmark invariant broken: {result.false_negatives} forged claim(s) "
+            "were ACCEPTED. The honesty gate leaked."
+        )
+        sys.exit(1)
 
 
 # ── contract group ──────────────────────────────────────────────────────

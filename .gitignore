@@ -39,3 +39,9 @@ proofs/
 *.log
 .turbo/
 .cache/
+
+# runtime artifacts (not source)
+ledger/
+proofs/
+*.output
+.coverage

@@ -1,324 +1,198 @@
 # RIGForge
 
-**A deterministic, phase-gated build system for agentic engineering.** Every build moves through explicit phases, each sealed with an integrity-hashed — optionally HMAC-signed — `ProofPacket`. "Done" becomes something you can re-verify with a command, not something an agent claims in a chat.
+### Don't trust your agents. Prove them.
 
-![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg) ![Tests](https://img.shields.io/badge/tests-110%2B%20passing-brightgreen.svg) ![Status](https://img.shields.io/badge/status-beta-orange.svg)
+**RIGForge catches your AI coding agent when it lies about "done."** When an agent
+says `BUILD COMPLETE ✅`, you have its word and nothing behind it. RIGForge replaces
+the word with a cryptographically signed `ProofPacket` — so "the build passed" becomes
+something you re-verify with one command, not a message in a chat thread.
+
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+![Tests](https://img.shields.io/badge/tests-219%20passing-brightgreen.svg)
+![Works with](https://img.shields.io/badge/works%20with-Claude%20Code%20·%20Codex%20·%20Cursor-8A2BE2.svg)
+
+---
+
+## See it catch a lie in 5 seconds
+
+```bash
+pip install -e .   # then:
+rigforge demo
+```
+
+```
+╭───────────────────────────────────────────╮
+│  RIGForge  ·  Live Tamper-Detection Demo  │
+╰───────────────────────────────────────────╯
+
+1 · the claim     An AI agent reports:  BUILD COMPLETE ✅
+
+2 · RIGForge seals a signed ProofPacket
+      packet sha256   7def637005db987daeb020992dd36ef1…
+      hmac signature  8c80ed299a6298e22e60893af036f4f2…
+      integrity       ✔ valid
+      signature       ✔ valid
+
+3 · the tamper    The artifact is TAMPERED and the packet hash is
+                  re-forged to hide it. Naive integrity now PASSES —
+                  the lie looks clean.
+
+4 · RIGForge verify
+      naive integrity check  PASS  — fooled by the re-forged hash
+      hmac signature check   FAIL  — signature does not verify
+
+   🚨 FORGED. Signature invalid. The agent lied.
+```
+
+Nothing in that demo is scripted. Every hash, signature, and verdict is computed by the
+**same code path** that seals and verifies real work. Swap the narration for your own
+`assert`s — the cryptographic outcome doesn't change. The forged seal gets caught because
+the HMAC was bound to the *original* artifact hash, and the attacker never had the signing key.
 
 ## The problem
 
-AI coding agents are fast and confident — and that's exactly the risk. They report success they didn't earn, skip the gate that would've caught the failure, and leave no trail to prove what actually ran. When an agent says "done," you have its word and nothing behind it.
+AI coding agents are fast and confident — and that's exactly the risk. They report success
+they didn't earn, skip the gate that would've caught the failure, and leave no trail to prove
+what actually ran. A "✅ done" in your terminal is unfalsifiable. You can't audit a vibe.
 
-RIGForge replaces the agent's word with proof. Work flows through 7 explicit phases; each phase runs a deterministic bundle of quality gates; passing a phase seals a `ProofPacket` that hashes every artifact and records the exact run environment. Verification is a command, not a vibe:
+RIGForge makes agent output **provable**:
+
+- Work seals a `ProofPacket` that SHA-256-hashes every artifact and records the exact run environment.
+- The packet is HMAC-SHA256 **signed** — tamper the result and re-forge the hash, the signature still fails.
+- Verification is a command: `rigforge verify --strict --require-signature`. Pass = a signed, re-checkable artifact. Not a message in a thread.
+
+## 90-second quickstart
 
 ```bash
-rigforge verify --strict --require-signature
+git clone https://github.com/rodgemd1-lgtm/rigforge-deterministic-platform.git
+cd rigforge-deterministic-platform
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+
+rigforge demo                    # watch it catch a forged "done"
+rigforge init                    # scaffold proofs/, contracts/, ledger/, rigforge.yaml
+rigforge run 1                   # run a phase's deterministic gate bundle
+rigforge seal 1 --artifact docs/PHASE1.md --evidence "bootstrap complete"
+rigforge verify --require-signature
 ```
 
-## Who it's for
+## Prove it yourself — the honesty benchmark
 
-- **Eng leads** who need agent output to be auditable before it merges.
-- **Platform teams** wiring AI agents (Claude Code, Codex, OpenCode) into a governed pipeline over MCP.
-- **Anyone** who wants "the build passed" to mean a signed, re-checkable artifact — not a message in a thread.
+Don't take the README's word for it either. RIGForge ships a seeded, offline, reproducible
+benchmark that runs forged-proof attack scenarios (tampered artifact, forged signature,
+swapped artifact, dropped gate, unsigned tamper) and reports the **false-done-caught rate** —
+how often the signature check catches a lie that naive integrity misses:
 
-## What you get
+```bash
+rigforge benchmark               # real crypto, deterministic seed, byte-identical across runs
+```
 
-- **7 build phases** from bootstrap to cockpit, each sealed with integrity-hashed `ProofPacket`s
-- **HMAC-SHA256 signed proof packets** (G006) — `rigforge verify --require-signature`
-- **GEV (Generate-Evaluate-Verify) contract models** via `contracts/v1/`
-- **Operator + agent CLI** (`rigforge init|doctor|status|run|seal|verify|contract|archon|review|resume|cockpit`) with `--json` everywhere
-- **`ArchonHarness`** orchestrator with parallel multi-agent gate scheduling (G002), runtime cost/token budget enforcement (G005), and automatic resume of failed runs (G007)
-- **`RunEnvelope` + `ExecutionLedger`** for deterministic, auditable runs
-- **Typed `rigforge.yaml`** loader (`rigforge.config.RigForgeConfig`) wiring budgets, signing keys, MCP auth, scheduler, and cockpit settings
-- **MCP server** with both HTTP (bearer-token authn, G003) and stdio JSON-RPC transports (G001) for AI coding agents (Codex, Claude Code, OpenCode)
-- **Cockpit UI** (G008) — `rigforge cockpit` serves an HTML mission-control view
-- **110+ tests** covering models, CLI, harness, scheduler, budgets, signing, resume, cockpit, and both MCP transports
+On the default seed it runs 16 scenarios — 8 honest, 8 forged across 5 attack classes — and
+catches **every** forged "done" while wrongly blocking **zero** honest ones:
 
-## Phases
+```
+false_done_caught_rate    1.00   (8/8 forgeries caught — 0 slipped through)
+false_pass_rate           0.00   (0/8 honest claims wrongly blocked)
+accuracy                  1.00   (16/16 verdicts correct)
+```
 
-| Phase | Name | Description |
-|-------|------|-------------|
-| 1 | Bootstrap & Doctrine | Repository structure, doctrine docs, RUSR hardening |
+That 100% isn't a marketing number — it's the *point*: an HMAC bound to the original artifact
+hash is cryptographically unforgeable without the key, so a tampered "done" **must** fail the
+signature check. Every figure is tallied from actual `ProofPacket.verify_signature()` verdicts,
+not hardcoded — read [`rigforge/benchmark.py`](rigforge/benchmark.py) and re-run it yourself.
+
+## Works with your stack
+
+**Your agent** — RIGForge exposes its contract + proof tools over **MCP**, so Claude Code,
+Codex, Cursor, and OpenCode can seal and verify proofs directly:
+
+```bash
+rigforge mcp-serve --transport stdio          # preferred by Claude Code et al.
+rigforge mcp-serve --auth-token "$RIGFORGE_MCP_TOKEN"   # HTTP, bearer-token auth
+```
+
+**Your observability** — RIGForge emits OpenTelemetry spans per phase and gate. Point it at
+your existing collector and traces drop into **Langfuse / Phoenix / Jaeger**. With no
+collector set, spans print as OTLP-JSON to stdout. Not installed? It's a clean no-op — the
+free core never requires it:
+
+```bash
+pip install -e ".[telemetry]"
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 rigforge trace 1
+```
+
+## How it works
+
+Work flows through 7 explicit phases. Each phase runs a deterministic bundle of quality gates
+(pytest, ruff, schema + config validation — each timeout-guarded). Passing a phase seals a
+`ProofPacket`:
+
+```
+artifact ──SHA-256──▶ integrity hash ──HMAC-SHA256(signing key)──▶ signature
+                                                   │
+                          rigforge verify ─────────┘  re-checks both. Tamper either → FAIL.
+```
+
+| Phase | Name | What it gates |
+|-------|------|---------------|
+| 1 | Bootstrap & Doctrine | Repo structure, doctrine docs, hardening |
 | 2 | Environment Validation | Python, deps, config checks |
 | 3 | Runtime Kernel | Core models, schemas, registries |
 | 4 | Control Plane Registries | Agent catalog, build cards, intent maps |
 | 5 | GEV Loop + DoneContract | Contract-based verification with proof packets |
-| 6 | Archon + DeerFlow Harness | Agent orchestration and workflow engine |
-| 7 | Cockpit + Retrofit Protocol | Mission-control UI and retroactive protocol |
+| 6 | Archon Harness | Agent orchestration, parallel gate scheduling, budget enforcement, auto-resume |
+| 7 | Cockpit | `rigforge cockpit` — mission-control HTML view |
 
-## Quick Start — Local Installation
-
-```bash
-# Clone the repo
-git clone https://github.com/rodgemd1-lgtm/rigforge-deterministic-platform.git
-cd rigforge-deterministic-platform
-
-# Create a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install the package (CLI + contract models)
-pip install -e .
-
-# Install MCP server dependencies (optional, for rigforge mcp-serve)
-pip install -e ".[mcp]"
-
-# Install dev dependencies (for running tests)
-pip install -e ".[dev]"
-```
-
-## CLI Usage
+## CLI reference
 
 ```bash
-# Scaffold a new RIGForge project (proofs/, contracts/, ledger/, docs/, rigforge.yaml)
-rigforge init
-
-# Diagnose Python version, repo layout, contracts, CI, and lint readiness
-rigforge doctor
-
-# Show phase status (add --json for machine-readable output)
-rigforge status
-rigforge --json status
-
-# Run a phase's deterministic gate bundle
-rigforge run 1
-rigforge run 1 --dry-run         # plan only, no side effects
-rigforge --json run 1            # machine-readable
-
-# Seal a phase with a ProofPacket (artifact hashes + RunEnvelope + gate evidence)
-rigforge seal 1 --artifact docs/PHASE1.md --evidence "bootstrap complete"
-
-# Verify all sealed phases (schema + integrity hash; --strict adds phase-order check,
-# --require-signature also checks the HMAC signature on each packet)
-rigforge verify
-rigforge verify --strict --json
-rigforge verify --require-signature
-
-# Resume the most recent failed or unfinished phase (G007)
-rigforge resume
-
-# Cockpit — Phase 7 mission-control HTML view (G008)
-rigforge cockpit                # serves on 127.0.0.1:8770 by default
-rigforge cockpit --print        # render the HTML to stdout (no server)
-
-# Contract operations
-rigforge contract list
-rigforge contract create --studio strategy --lane BC-DEMO-V1 --out contracts/v1/demo.yaml
-rigforge contract validate contracts/v1/demo.yaml
-rigforge contract inspect  contracts/v1/demo.yaml
-
-# Archon harness
-rigforge archon plan 1
-rigforge archon run  1
-rigforge archon status
-
-# Self-review surfaces
-rigforge review        # questions + gaps + status snapshot
-rigforge questions     # 20 senior-agentic-engineering questions
-rigforge gaps          # tracked platform gaps
-
-# MCP server (HTTP transport; supports --auth-token / RIGFORGE_MCP_TOKEN, G003)
-rigforge mcp-serve
-rigforge mcp-serve --auth-token "$RIGFORGE_MCP_TOKEN"
-
-# MCP server (stdio JSON-RPC transport, G001 — preferred by Claude Code etc.)
-rigforge mcp-serve --transport stdio
-
-# Version
-rigforge --version
+rigforge init                    # scaffold a project
+rigforge doctor                  # diagnose env, layout, contracts, CI, lint readiness
+rigforge status                  # phase status        (--json for machine-readable)
+rigforge run N [--dry-run]       # run phase N's deterministic gate bundle
+rigforge seal N --artifact PATH  # seal a phase with a ProofPacket
+rigforge verify [--strict] [--require-signature]   # re-check sealed phases
+rigforge resume                  # resume the most recent failed/unfinished phase
+rigforge benchmark               # the honesty benchmark (false-done-caught rate)
+rigforge demo                    # live tamper-detection demo
+rigforge trace N                 # run a phase with OpenTelemetry tracing
+rigforge cockpit                 # serve the mission-control UI (127.0.0.1:8770)
+rigforge mcp-serve               # expose tools to AI agents over MCP
+rigforge contract list|create|validate|inspect
 ```
 
-### Global options
-
-* `--cwd PATH` — override project-root discovery (default: walk upward from `cwd`
-  looking for `rigforge.yaml`, `pyproject.toml`, or `.git/`).
-* `--json` — emit machine-readable JSON where the command supports it.
+`--json` works everywhere it makes sense. `--cwd PATH` overrides project-root discovery.
 
 ## Configuration (`rigforge.yaml`)
 
-`rigforge init` scaffolds a typed `rigforge.yaml`. The schema is defined by
-`rigforge.config.RigForgeConfig` and exposes:
+`rigforge init` scaffolds a typed config (`rigforge.config.RigForgeConfig`):
 
-| Section | Keys | Purpose |
-|---------|------|---------|
-| `budgets` | `max_cost_usd`, `max_tokens`, `max_runtime_minutes` | Runtime ceilings enforced by `ArchonHarness.charge()` (G005) |
-| `mcp` | `host`, `port`, `transport` (`http`\|`stdio`), `services`, `token`, `token_file` | MCP server transport + bearer-token auth (G001, G003) |
-| `scheduler` | `max_parallel_gates`, `agents` | Multi-agent gate scheduling (G002) |
-| `signing` | `enabled`, `key_file`, `require_on_verify` | HMAC-SHA256 ProofPacket signing (G006) |
-| `cockpit` | `host`, `port` | Phase 7 cockpit UI (G008) |
+| Section | Purpose |
+|---------|---------|
+| `budgets` | Cost / token / runtime ceilings, enforced by the harness |
+| `mcp` | MCP transport (`http`\|`stdio`), services, bearer-token auth |
+| `scheduler` | Parallel gate scheduling, agent catalog |
+| `signing` | HMAC-SHA256 ProofPacket signing + `require_on_verify` |
+| `cockpit` | Cockpit UI host/port |
 
-Environment-variable overrides: `RIGFORGE_SIGNING_KEY` /
-`RIGFORGE_SIGNING_KEY_FILE`, `RIGFORGE_MCP_TOKEN` /
-`RIGFORGE_MCP_TOKEN_FILE`, `RIGFORGE_MAX_PARALLEL_GATES`.
+Env overrides: `RIGFORGE_SIGNING_KEY[_FILE]`, `RIGFORGE_MCP_TOKEN[_FILE]`,
+`RIGFORGE_MAX_PARALLEL_GATES`. `rigforge doctor` validates the file.
 
-`rigforge doctor` validates the file (`config_valid` gate).
-
-## MCP Server — Use in Codex, Claude Code, OpenCode
-
-Start the MCP server to expose RIGForge contract tools to AI coding agents:
+## Tests
 
 ```bash
-# Start MCP server with all services
-rigforge mcp-serve
-
-# Start with specific services
-rigforge mcp-serve --services recall,stitch
-
-# Custom host/port
-rigforge mcp-serve --host 127.0.0.1 --port 9000
+pip install -e ".[dev]"
+pytest                           # 219 passing
 ```
 
-### MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `gev.contract_create` | Create a new DoneContract with GEV triad |
-| `gev.contract_validate` | Validate a DoneContract against the schema |
-| `gev.contract_list` | List all contract YAML files |
-| `gev.phase_status` | Get phase seal status (all or single) |
-| `gev.proof_seal` | Seal a phase with a proof packet |
-
-### Adding to AI Agent Config
-
-For **Codex** or **OpenCode**, add to your agent config:
-
-```json
-{
-  "mcp_servers": {
-    "rigforge": {
-      "command": "rigforge",
-      "args": ["mcp-serve", "--port", "8765"]
-    }
-  }
-}
-```
-
-For **Claude Code**, use the MCP stdio transport:
-
-```json
-{
-  "mcpServers": {
-    "rigforge": {
-      "command": "rigforge",
-      "args": ["mcp-serve"]
-    }
-  }
-}
-```
-
-## GEV Contract Models (contracts/v1/)
-
-Five Pydantic models form the core contract system:
-
-| Model | Purpose |
-|-------|---------|
-| `DoneContract` | Top-level build contract: objective, artifacts, gates, constraints |
-| `VerifierPackage` | GEV triad: generator → verifier → evaluator |
-| `RequiredArtifact` | Artifact spec with type, gate, optional flag |
-| `AcceptanceCriterion` | Boolean gate with severity (hard_block/soft_block/advisory) |
-| `ForbiddenAction` | Hard rule with domain (security/scope/deploy/etc.) |
-
-### Key Invariants
-
-- **No self-verification**: verifier must differ from generator
-- **Authority ranking**: evaluator must have ≥ authority of generator
-- **Human-in-chain**: `approval_required=True` contracts need at least one Human in the GEV triad
-- **Sealed contracts**: must have objective, artifacts, criteria, and verifier
-
-### Example: Creating a DoneContract
-
-```python
-from contracts.v1 import DoneContract, VerifierPackage, RequiredArtifact, AcceptanceCriterion, ForbiddenAction
-from contracts.v1.models.verifier_package import AgentRole
-from contracts.v1.models.required_artifact import ArtifactType, Gate
-from contracts.v1.models.acceptance_criterion import CriterionCategory, CriterionSeverity
-from contracts.v1.models.forbidden_action import ActionDomain
-
-dc = DoneContract(
-    studio="strategy",
-    lane="BC-RIG-STRATEGY-V4",
-    objective="Build RIG strategy deliverable",
-    required_artifacts=[
-        RequiredArtifact(name="decision_contract", artifact_type=ArtifactType.DOC),
-        RequiredArtifact(name="proofpacket", artifact_type=ArtifactType.PROOF, gate=Gate.PRE_SHIP),
-    ],
-    acceptance_criteria=[
-        AcceptanceCriterion(expression="no_source_no_number", category=CriterionCategory.COMPLIANCE),
-    ],
-    forbidden_actions=[
-        ForbiddenAction(rule="No strategy without RIG-L score", domain=ActionDomain.APPROVAL),
-    ],
-    verifier_package=VerifierPackage(
-        generator=AgentRole.PYCODE,
-        verifier=AgentRole.CODEX,
-        evaluator=AgentRole.HUMAN,
-    ),
-)
-
-print(dc.to_yaml_dict())
-```
-
-## Running Tests
-
-```bash
-# Run all tests (GEV models + CLI + MCP server)
-pytest
-
-# Run only GEV model tests
-pytest contracts/v1/tests/
-
-# Run only CLI/MCP tests
-pytest rigforge/tests/
-
-# Run with verbose output
-pytest -v
-```
-
-## GitHub Actions CI
-
-A CI workflow is installed at `.github/workflows/ci.yml`. The same content is
-preserved at `ci-workflow.yml` (root) as a portable template if you need to
-re-install it manually (e.g. from an OAuth token without `workflow` scope):
-
-```bash
-gh api repos/OWNER/REPO/contents/.github/workflows/ci.yml \
-  -X PUT -f message="ci: add CI workflow" -f content="$(base64 < ci-workflow.yml)"
-```
-
-## Project Structure
-
-```
-rigforge-deterministic-platform/
-  rigforge/
-    __init__.py          # Package root, version
-    cli.py               # Click CLI entry-point (rigforge command)
-    config.py            # Typed rigforge.yaml loader (RigForgeConfig)
-    context.py           # Project-root resolver
-    run_envelope.py      # RunEnvelope model (run identity + env snapshot)
-    proof.py             # ProofPacket model (artifact hashes + integrity hash + HMAC signature)
-    ledger.py            # ExecutionLedger (append-only JSONL audit log)
-    gates.py             # Built-in quality gates + per-phase bundles
-    harness.py           # ArchonHarness (plan → parallel gates → seal, budgets, resume)
-    cockpit.py           # Phase 7 cockpit (HTML + FastAPI app, G008)
-    questions.py         # 20 senior-agentic-engineering questions
-    gaps.py              # Tracked + resolved platform gaps
-    mcp_server.py        # MCP server (HTTP + stdio JSON-RPC, bearer-token auth)
-    tests/
-      test_cli.py         # CLI command tests
-      test_mcp_server.py  # MCP server tool tests
-      test_platform.py    # ProofPacket/RunEnvelope/Ledger/Harness/Gates tests
-  contracts/
-    v1/
-      __init__.py           # Package export of 5 models
-      models/               # Pydantic GEV models
-      schemas/              # YAML schema references
-      tests/
-        test_gev_models.py  # 30 tests for all 5 models
-  .github/workflows/ci.yml  # CI workflow
-  ci-workflow.yml           # Portable CI template (mirror of installed workflow)
-  pyproject.toml            # Build config, dependencies, CLI entry-point
-  README.md                 # This file
-```
+The suite is adversarial by design: tamper-detection, eval-loop no-spin guarantees, gate
+timeouts, ledger concurrency, and MCP refuse-by-default are all proven with **planted
+failures** — each test fails on the broken code and passes only with the fix in place.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). Built by [RIG (Rodgers Intelligence Group)](https://rodgersintelligence.com).
+
+> ⭐ If "prove it, don't trust it" is how you want your agents to work, star the repo —
+> it's the signal that keeps this free core moving.
