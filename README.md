@@ -111,6 +111,14 @@ hash is cryptographically unforgeable without the key, so a tampered "done" **mu
 signature check. Every figure is tallied from actual `ProofPacket.verify_signature()` verdicts,
 not hardcoded — read [`rigforge/benchmark.py`](rigforge/benchmark.py) and re-run it yourself.
 
+Want to see *why each layer matters*? The **[false-done-caught leaderboard](docs/LEADERBOARD.md)**
+scores verification strategies head-to-head — naive integrity catches **0%**, signing **67%**,
+spec-bound **100%**:
+
+```bash
+rigforge benchmark --leaderboard
+```
+
 ## Works with your stack
 
 **Your agent** — RIGForge exposes its contract + proof tools over **MCP**, so Claude Code,

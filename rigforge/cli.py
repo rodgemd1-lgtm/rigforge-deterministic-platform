@@ -596,8 +596,11 @@ def diff(click_ctx: click.Context, proof_a: Path, proof_b: Path):
               help="Integer seed for the deterministic scenario suite "
                    "(default: 0xC0FFEE = 12648430). Re-runs with the same seed "
                    "reproduce identical artifacts, forgeries, and counts.")
+@click.option("--leaderboard", "leaderboard_mode", is_flag=True, default=False,
+              help="Score verification STRATEGIES (naive / signed / spec-bound) "
+                   "against the forgery suite — the false-done-caught leaderboard.")
 @click.pass_context
-def benchmark(click_ctx: click.Context, seed: int | None):
+def benchmark(click_ctx: click.Context, seed: int | None, leaderboard_mode: bool):
     """Run the OFFLINE honesty-gate benchmark: real tamper-detection numbers.
 
     Runs a fixed, seeded suite of deterministic build-task scenarios. For each,
@@ -608,6 +611,11 @@ def benchmark(click_ctx: click.Context, seed: int | None):
     false-done-caught rate, false-pass rate (wrongly blocked honest claims),
     tamper-detection precision, accuracy, plus per-scenario verdicts.
 
+    With ``--leaderboard``, scores each verification *strategy* (naive integrity
+    / signed / spec-bound) against the suite so you can see why each layer
+    matters — naive is fooled, signing catches tampering, spec-binding also
+    catches skipped requirements.
+
     Fully offline: no network, no LLM, no flakiness. Re-running with the same
     seed reproduces identical numbers. If a metric could not be honestly
     measured offline it is OMITTED, never faked.
@@ -615,6 +623,17 @@ def benchmark(click_ctx: click.Context, seed: int | None):
     from rigforge.benchmark import DEFAULT_SEED, render_benchmark, run_benchmark
 
     chosen_seed = DEFAULT_SEED if seed is None else seed
+
+    if leaderboard_mode:
+        from rigforge.leaderboard import render_leaderboard, run_leaderboard
+
+        lb = run_leaderboard(seed=chosen_seed)
+        if _is_json(click_ctx):
+            click.echo(json.dumps(lb, indent=2))
+        else:
+            render_leaderboard(lb)
+        return
+
     result = run_benchmark(seed=chosen_seed)
     payload = result.to_dict()
     payload["seed"] = chosen_seed
