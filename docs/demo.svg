@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="500" viewBox="0 0 760 500" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#11141b"/>
+      <stop offset="1" stop-color="#0b0d12"/>
+    </linearGradient>
+  </defs>
+
+  <!-- window -->
+  <rect x="0" y="0" width="760" height="500" rx="12" fill="url(#bg)"/>
+  <rect x="0.5" y="0.5" width="759" height="499" rx="11.5" fill="none" stroke="#262b36"/>
+
+  <!-- title bar -->
+  <g>
+    <circle cx="24" cy="24" r="6" fill="#ff5f56"/>
+    <circle cx="44" cy="24" r="6" fill="#ffbd2e"/>
+    <circle cx="64" cy="24" r="6" fill="#27c93f"/>
+    <text x="380" y="28" text-anchor="middle" fill="#7d8593" font-size="13">rigforge demo</text>
+  </g>
+  <line x1="0" y1="48" x2="760" y2="48" stroke="#1c212b"/>
+
+  <g font-size="14.5">
+    <!-- prompt -->
+    <text x="24" y="82"><tspan fill="#27c93f">$</tspan><tspan fill="#cdd3de"> rigforge demo</tspan></text>
+
+    <!-- 1 claim -->
+    <text x="24" y="118" fill="#7d8593">1 · the claim</text>
+    <text x="150" y="118" fill="#e6eaf2">An AI agent reports:  </text>
+    <text x="400" y="118" fill="#9be6a0" font-weight="bold">BUILD COMPLETE ✅</text>
+
+    <!-- 2 seal -->
+    <text x="24" y="152" fill="#7d8593">2 · RIGForge seals a signed ProofPacket</text>
+    <text x="48" y="176" fill="#8b93a3">packet sha256   </text>
+    <text x="210" y="176" fill="#7aa2f7">7def637005db987daeb020992dd36ef1…</text>
+    <text x="48" y="196" fill="#8b93a3">hmac signature  </text>
+    <text x="210" y="196" fill="#7aa2f7">8c80ed299a6298e22e60893af036f4f2…</text>
+    <text x="48" y="216" fill="#8b93a3">integrity       </text>
+    <text x="210" y="216" fill="#27c93f">✔ valid</text>
+    <text x="48" y="236" fill="#8b93a3">signature       </text>
+    <text x="210" y="236" fill="#27c93f">✔ valid</text>
+
+    <!-- 3 tamper -->
+    <text x="24" y="272" fill="#7d8593">3 · the tamper</text>
+    <text x="150" y="272" fill="#e6eaf2">The artifact is </text>
+    <text x="300" y="272" fill="#ffbd2e">TAMPERED</text>
+    <text x="388" y="272" fill="#e6eaf2"> and the hash re-forged to hide it.</text>
+    <text x="150" y="292" fill="#8b93a3">Naive integrity now PASSES — the lie looks clean.</text>
+
+    <!-- 4 verify -->
+    <text x="24" y="328" fill="#7d8593">4 · RIGForge verify</text>
+    <text x="48" y="352" fill="#8b93a3">naive integrity check   </text>
+    <text x="290" y="352" fill="#ffbd2e">PASS</text>
+    <text x="340" y="352" fill="#5c6473">— fooled by the re-forged hash</text>
+    <text x="48" y="372" fill="#8b93a3">hmac signature check    </text>
+    <text x="290" y="372" fill="#ff5f56">FAIL</text>
+    <text x="340" y="372" fill="#5c6473">— signature does not verify</text>
+
+    <!-- verdict -->
+    <rect x="24" y="396" width="712" height="40" rx="8" fill="#1a1115" stroke="#5b2230"/>
+    <text x="380" y="421" text-anchor="middle" fill="#ff6b6b" font-size="16" font-weight="bold">🚨 FORGED. Signature invalid. The agent lied.</text>
+
+    <!-- tagline -->
+    <text x="380" y="470" text-anchor="middle" fill="#cdd3de" font-size="15" font-style="italic">Don't trust your agents. Prove them.<tspan fill="#7d8593">  — RIGForge</tspan></text>
+  </g>
+</svg>

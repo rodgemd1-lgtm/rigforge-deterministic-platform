@@ -12,6 +12,10 @@ something you re-verify with one command, not a message in a chat thread.
 ![Tests](https://img.shields.io/badge/tests-219%20passing-brightgreen.svg)
 ![Works with](https://img.shields.io/badge/works%20with-Claude%20Code%20·%20Codex%20·%20Cursor-8A2BE2.svg)
 
+<p align="center">
+  <img src="docs/demo.svg" alt="rigforge demo — RIGForge catches a forged 'BUILD COMPLETE' by failing the HMAC signature check" width="720">
+</p>
+
 ---
 
 ## See it catch a lie in 5 seconds
@@ -20,6 +24,8 @@ something you re-verify with one command, not a message in a chat thread.
 pip install -e .   # then:
 rigforge demo
 ```
+
+Output (real — the tamper detection is computed by the same crypto the platform uses):
 
 ```
 ╭───────────────────────────────────────────╮
