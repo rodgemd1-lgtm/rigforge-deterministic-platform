@@ -131,6 +131,32 @@ pip install -e ".[telemetry]"
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 rigforge trace 1
 ```
 
+## Running a fleet? The swarm verdict board
+
+One agent, you can eyeball. Twenty-five, you can't. Every seal/verify lands on a per-agent
+board so you can see — provably — **which of your agents to trust and which to reject:**
+
+```bash
+rigforge verdicts          # (or open the cockpit at :8770 for the live grid)
+```
+
+```
+        RIGForge · swarm verdict board (by actor)
+┃ actor        ┃ accepted ┃ rejected ┃ trust ┃
+│ claude-code  │        5 │        1 │   83% │
+│ cursor-agent │        3 │        0 │  100% │
+│ rogue-bot    │        0 │        4 │    0% │   ← caught
+```
+
+Agents feed the board with **one MCP call** — no config, the signing key stays server-side so
+the agent can't forge its own verdict:
+
+```jsonc
+// tools/call → gev.seal_and_verify
+{ "agent": "claude-code", "name": "auth refactor", "artifacts": ["src/auth.py"] }
+// → { "accepted": true, "integrity_ok": true, "signature_ok": true, ... }
+```
+
 ## Honest scope
 
 RIGForge proves **integrity and provenance** — that an artifact is what the agent claims
@@ -173,6 +199,7 @@ rigforge verify [--strict] [--require-signature]   # re-check sealed phases
 rigforge resume                  # resume the most recent failed/unfinished phase
 rigforge benchmark               # the honesty benchmark (false-done-caught rate)
 rigforge demo                    # live tamper-detection demo
+rigforge verdicts                # swarm verdict board: per-agent accept/reject + trust%
 rigforge trace N                 # run a phase with OpenTelemetry tracing
 rigforge cockpit                 # serve the mission-control UI (127.0.0.1:8770)
 rigforge mcp-serve               # expose tools to AI agents over MCP

@@ -353,6 +353,31 @@ class TestCockpit:
         api = client.get("/api/status").json()
         assert "phases" in api
 
+    def test_render_html_contains_verdict_board(self, ctx):
+        from rigforge.cockpit import render_cockpit_html
+        from rigforge.ledger import ExecutionLedger
+
+        led = ExecutionLedger(ctx.ledger_file)
+        led.append(kind="verify", actor="good-agent", accepted=True)
+        led.append(kind="verify", actor="rogue-bot", accepted=False)
+        out = render_cockpit_html(ctx)
+        assert "Swarm verdict board" in out
+        assert "good-agent" in out
+        assert "rogue-bot" in out
+
+    def test_api_verdicts_endpoint(self, ctx):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            pytest.skip("fastapi testclient not installed")
+        from rigforge.cockpit import build_cockpit_app
+        from rigforge.ledger import ExecutionLedger
+
+        ExecutionLedger(ctx.ledger_file).append(kind="verify", actor="a1", accepted=True)
+        client = TestClient(build_cockpit_app(ctx))
+        data = client.get("/api/verdicts").json()
+        assert data["verdicts"]["a1"]["accepted"] == 1
+
 
 # ── verify --require-signature ──────────────────────────────────────────
 

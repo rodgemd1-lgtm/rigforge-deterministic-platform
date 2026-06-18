@@ -5,9 +5,52 @@ from rigforge.mcp_server import (
     contract_create,
     contract_validate,
     contract_list,
+    handle_jsonrpc,
+    list_tools,
     phase_status,
     proof_seal,
+    seal_and_verify,
 )
+from rigforge.ledger import ExecutionLedger
+
+
+class TestSealAndVerify:
+    """Move #3 — the one-call MCP adoption path that feeds the swarm board."""
+
+    def _isolate(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("RIGFORGE_SIGNING_KEY", "test-signing-key")
+        (tmp_path / "build.bin").write_text("real build output")
+
+    def test_honest_claim_accepted_and_recorded(self, tmp_path, monkeypatch):
+        self._isolate(tmp_path, monkeypatch)
+        v = seal_and_verify("claude-code", "feature X", artifacts=["build.bin"])
+        assert v["accepted"] is True
+        assert v["integrity_ok"] is True
+        assert v["signature_ok"] is True
+        assert v["packet_sha256"]
+        board = ExecutionLedger(tmp_path / "ledger" / "execution.jsonl").verdicts()
+        assert board["claude-code"]["accepted"] == 1
+        assert board["claude-code"]["rejected"] == 0
+
+    def test_exposed_in_catalogue(self):
+        assert any(t["name"] == "gev.seal_and_verify" for t in list_tools())
+
+    def test_callable_over_jsonrpc(self, tmp_path, monkeypatch):
+        self._isolate(tmp_path, monkeypatch)
+        resp = handle_jsonrpc(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "gev.seal_and_verify",
+                    "arguments": {"agent": "cursor", "name": "feat Y", "artifacts": ["build.bin"]},
+                },
+            }
+        )
+        assert "error" not in resp
+        assert "result" in resp
 
 
 class TestContractCreate:

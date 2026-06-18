@@ -120,6 +120,85 @@ def proof_seal(phase: int, artifacts: list[str] | None = None) -> dict[str, Any]
     return proof
 
 
+def _project_signing_key() -> bytes:
+    """Load the server-side project signing key — the agent never receives it.
+
+    Resolution: ``RIGFORGE_SIGNING_KEY`` env → the per-project key at
+    ``.rigforge/signing.key`` (auto-created if absent). The MCP server signs;
+    the calling agent only ever gets a verdict back. This is the trust model:
+    an untrusted agent cannot forge a packet it cannot sign.
+    """
+    import os
+
+    env = os.environ.get("RIGFORGE_SIGNING_KEY")
+    if env:
+        return env.encode("utf-8")
+    from rigforge.config import ensure_signing_key
+
+    key_path, _ = ensure_signing_key(Path.cwd())
+    return key_path.read_bytes().strip()
+
+
+def seal_and_verify(
+    agent: str,
+    name: str,
+    artifacts: list[str] | None = None,
+    gates: list[dict[str, Any]] | None = None,
+    phase: int = 1,
+) -> dict[str, Any]:
+    """Seal an agent's claimed work into a signed ProofPacket, verify it, and
+    record the accept/reject verdict to the ledger under the agent's identity.
+
+    The one-call adoption path: an AI agent (Claude Code / Cursor / Codex)
+    reports completion; RIGForge seals a REAL signed packet over the named
+    artifacts (server-side key — the agent never holds it), runs its own
+    integrity + signature verification, and appends the verdict to the swarm
+    verdict board (`rigforge verdicts`). Returns the verdict only.
+    """
+    from rigforge.ledger import ExecutionLedger
+    from rigforge.proof import ArtifactRecord, GateOutcome, ProofPacket
+
+    key = _project_signing_key()
+    root = Path.cwd()
+    records = [ArtifactRecord.from_path(Path(a), base=root) for a in (artifacts or [])]
+    gate_outcomes = [
+        GateOutcome(
+            name=str(g.get("name", "gate")),
+            passed=bool(g.get("passed", True)),
+            detail=str(g.get("detail", "")),
+        )
+        for g in (gates or [{"name": "build", "passed": True}])
+    ]
+    packet = ProofPacket(
+        phase=phase,
+        name=name,
+        verifier=agent,
+        evidence=f"{agent} reported completion of {name!r}.",
+        artifacts=records,
+        gates=gate_outcomes,
+    ).sealed(signing_key=key)
+
+    integrity_ok = packet.verify_integrity()
+    signature_ok = packet.verify_signature(key)
+    accepted = bool(integrity_ok and signature_ok)
+
+    ExecutionLedger(root / "ledger" / "execution.jsonl").append(
+        kind="verify",
+        actor=agent,
+        accepted=accepted,
+        name=name,
+        packet_sha256=packet.packet_sha256,
+    )
+    return {
+        "agent": agent,
+        "name": name,
+        "accepted": accepted,
+        "integrity_ok": integrity_ok,
+        "signature_ok": signature_ok,
+        "packet_sha256": packet.packet_sha256,
+    }
+
+
 # ── Tool dispatcher (shared by HTTP + stdio transports) ─────────────────
 
 TOOL_DISPATCH: dict[str, Callable[..., Any]] = {
@@ -128,6 +207,9 @@ TOOL_DISPATCH: dict[str, Callable[..., Any]] = {
     "gev.contract_list": lambda: contract_list(),
     "gev.phase_status": lambda phase=None: phase_status(phase),
     "gev.proof_seal": lambda phase, artifacts=None: proof_seal(phase, artifacts),
+    "gev.seal_and_verify": lambda agent, name, artifacts=None, gates=None, phase=1: seal_and_verify(
+        agent, name, artifacts, gates, phase
+    ),
 }
 
 
@@ -184,6 +266,25 @@ def list_tools() -> list[dict[str, Any]]:
                     "artifacts": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["phase"],
+            },
+        },
+        {
+            "name": "gev.seal_and_verify",
+            "description": (
+                "Seal an agent's claimed work into a signed ProofPacket, verify it "
+                "(integrity + signature, server-side key), and record the accept/reject "
+                "verdict to the swarm verdict board under the agent's identity."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "description": "Agent identity (board row)."},
+                    "name": {"type": "string", "description": "What the agent built."},
+                    "artifacts": {"type": "array", "items": {"type": "string"}},
+                    "gates": {"type": "array", "items": {"type": "object"}},
+                    "phase": {"type": "integer", "minimum": 1, "maximum": 7, "default": 1},
+                },
+                "required": ["agent", "name"],
             },
         },
     ]

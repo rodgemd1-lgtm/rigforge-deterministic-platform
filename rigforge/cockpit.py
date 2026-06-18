@@ -80,6 +80,22 @@ def render_cockpit_html(ctx: ProjectContext) -> str:
         for ev in ledger_tail
     )
 
+    verdicts = ExecutionLedger(ctx.ledger_file).verdicts()
+    verdict_rows = "\n".join(
+        "<tr><td>{actor}</td><td class='ok'>{acc}</td><td class='bad'>{rej}</td>"
+        "<td>{trust}</td></tr>".format(
+            actor=html.escape(a),
+            acc=g["accepted"],
+            rej=g["rejected"],
+            trust=(
+                f"{g['accepted'] / (g['accepted'] + g['rejected']) * 100:.0f}%"
+                if (g["accepted"] + g["rejected"])
+                else "—"
+            ),
+        )
+        for a, g in sorted(verdicts.items())
+    ) or "<tr><td colspan='4'><em>no verdicts yet</em></td></tr>"
+
     return (
         "<!doctype html><html lang='en'><head>"
         "<meta charset='utf-8'><title>RIGForge Cockpit</title>"
@@ -89,9 +105,14 @@ def render_cockpit_html(ctx: ProjectContext) -> str:
         "table{border-collapse:collapse;margin-top:1rem;width:100%}"
         "th,td{border-bottom:1px solid #ccc;padding:.4rem .6rem;text-align:left}"
         "th{background:#f4f4f4}"
+        ".ok{color:#138000;font-weight:bold}.bad{color:#c0392b;font-weight:bold}"
         "</style></head><body>"
         f"<h1>🛸 RIGForge Cockpit</h1>"
         f"<small>{html.escape(str(ctx.root))}</small>"
+        "<h2>Swarm verdict board — which agents can you trust?</h2>"
+        "<table><thead><tr>"
+        "<th>agent</th><th>accepted</th><th>rejected</th><th>trust</th>"
+        f"</tr></thead><tbody>{verdict_rows}</tbody></table>"
         "<h2>Phases</h2><table><thead><tr>"
         "<th>#</th><th>Name</th><th>Status</th><th>Signature</th><th>Verifier</th>"
         f"</tr></thead><tbody>{rows}</tbody></table>"
@@ -128,6 +149,10 @@ def build_cockpit_app(ctx: ProjectContext):
                 "ledger_tail": ExecutionLedger(ctx.ledger_file).read(limit=15),
             }
         )
+
+    @app.get("/api/verdicts")
+    def api_verdicts() -> JSONResponse:
+        return JSONResponse({"verdicts": ExecutionLedger(ctx.ledger_file).verdicts()})
 
     @app.get("/healthz")
     def health() -> dict[str, str]:
